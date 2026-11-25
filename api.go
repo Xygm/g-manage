@@ -26,8 +26,9 @@ type App struct {
 	pending map[string]pendingAuth // OAuth state → 正在授权的账号
 	vault   vaultState             // 查看密码的解锁状态，受 mu 保护
 
-	browserLocks sync.Map   // 邮箱 → *sync.Mutex：同一账号的浏览器资料同时只做一件事（写密码库 / 启动）
-	switchMu     sync.Mutex // 同一时间只做一次切号（会关闭 / 重启客户端、改凭据管理器）
+	browserLocks   sync.Map   // 邮箱 → *sync.Mutex：同一账号的浏览器资料同时只做一件事（写密码库 / 启动）
+	switchMu       sync.Mutex // 同一时间只做一次切号（会关闭 / 重启客户端、改凭据管理器）
+	serviceCheckMu sync.Mutex // 同一时间只运行一个 agy 对话探针
 }
 
 type pendingAuth struct {
@@ -137,6 +138,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/accounts/{id}/authorize", a.authorize)
 	mux.HandleFunc("POST /api/accounts/{id}/password-changed", a.passwordChanged)
 	mux.HandleFunc("POST /api/quota/refresh", a.refreshAllQuota)
+	mux.HandleFunc("POST /api/accounts/{id}/appeal", a.appealAccount)
+	mux.HandleFunc("POST /api/accounts/{id}/service-check", a.checkAccountService)
 	mux.HandleFunc("GET /api/accounts/{id}/avatar", a.accountAvatar)
 	mux.HandleFunc("GET /api/chrome-profiles", a.chromeProfiles)
 	mux.HandleFunc("POST /api/chrome-profiles/import", a.importChromeProfiles)
@@ -217,16 +220,24 @@ func pathID(r *http.Request) (int64, error) {
 	return id, nil
 }
 
-func (a *App) writeViews(w http.ResponseWriter) {
+func (a *App) accountViews() ([]AccountView, error) {
 	accs, err := a.store.ListAccounts()
 	if err != nil {
-		writeErr(w, err)
-		return
+		return nil, err
 	}
 	now := today()
 	views := make([]AccountView, 0, len(accs))
 	for _, acc := range accs {
 		views = append(views, a.view(acc, now))
+	}
+	return views, nil
+}
+
+func (a *App) writeViews(w http.ResponseWriter) {
+	views, err := a.accountViews()
+	if err != nil {
+		writeErr(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -530,6 +541,11 @@ func (a *App) refreshQuota(ctx context.Context, acc Account, st Settings) error 
 		return err
 	}
 	info, qerr := g.fetchQuota(ctx, acc.RefreshToken)
+	if errorID, disabled := serviceDisabledFromError(qerr); disabled {
+		if err := a.store.SetServiceDisabled(acc.ID, errorID); err != nil {
+			log.Printf("保存 %s 的停用状态失败：%v", acc.Email, err)
+		}
+	}
 	if err := a.store.SetQuota(acc.ID, &info, qerr); err != nil {
 		log.Printf("保存 %s 的额度失败：%v", acc.Email, err)
 	}

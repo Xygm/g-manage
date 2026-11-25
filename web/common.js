@@ -23,6 +23,25 @@ async function api(method, path, body) {
 
 /* ---------- DOM 小工具 ---------- */
 
+// 优先使用系统剪贴板；WebView 拒绝异步 Clipboard API 时，退到用户手势触发的页面复制。
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  const area = h("textarea.clipboard-fallback", { readonly: "", "aria-hidden": "true" });
+  area.value = text;
+  document.body.append(area);
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch {}
+  area.remove();
+  return copied;
+}
+
 // h("tag.class", {attr}, ...children)：用 DOM API 建元素，避免拼接 HTML。
 function h(spec, attrs, ...children) {
   const [tag, ...classes] = spec.split(".");

@@ -228,6 +228,48 @@ function quotaRow(name, windowName, fraction, resetTime) {
   ];
 }
 
+function appealAccount(a, btn) {
+  busy(btn, async () => {
+    const r = await api("POST", `/api/accounts/${a.id}/appeal`);
+    await loadAccounts();
+    launched(r, `已在 ${a.email} 的浏览器中打开官方申诉页`);
+  });
+}
+
+function checkAccountService(a, btn) {
+  busy(btn, async () => {
+    try {
+      const r = await api("POST", `/api/accounts/${a.id}/service-check`);
+      state.accounts = r.accounts;
+      render();
+      toast(r.message, r.status === "disabled");
+    } catch (err) {
+      await loadAccounts();
+      throw err;
+    }
+  });
+}
+
+function serviceNotice(a) {
+  if (!a.service_disabled) return null;
+  const appealed = a.appeal_at > 0;
+  return h("div.service-notice", { role: "note" },
+    icon("warning"),
+    h("div.service-body", {},
+      h("strong.service-title", {}, appealed ? "Antigravity 申诉审核中" : "Antigravity 已停用"),
+      h("p", {}, "该账号的对话服务已被 Google 限制，需要提交申诉。"),
+      a.service_error_id ? h("button.service-error-id", {
+        type: "button", title: "复制 Error ID", "aria-label": `复制 Error ID ${a.service_error_id}`,
+        onclick: (e) => copyText(a.service_error_id, "Error ID 已复制", e.currentTarget),
+      }, h("span", {}, `Error ID: ${a.service_error_id}`), icon("copy")) : null,
+      h("div.service-actions", {},
+        button({ label: appealed ? "再次打开申诉" : "去申诉", iconName: "shield-check", variant: ".btn-soft-danger",
+          title: "在这个账号的独立浏览器中打开 Google 官方申诉表单", onClick: (e) => appealAccount(a, e.currentTarget) }),
+        button({ label: "重新检测", iconName: "arrows-clockwise", variant: ".btn-ghost",
+          title: "先查接口；当前 CLI 是这个账号时再发一条最小真实对话", onClick: (e) => checkAccountService(a, e.currentTarget) }),
+        appealed ? h("span.service-time", { title: fmtTime(a.appeal_at) }, `${fromNow(a.appeal_at)}已提交`) : null)));
+}
+
 // 兼容清理已存数据库里的原始 Google JSON 报错，并提取安全验证链接供一键在独立浏览器打开。
 function cleanQuotaError(raw) {
   if (!raw) return { text: "", verifyUrl: "" };
@@ -256,8 +298,9 @@ function cleanQuotaError(raw) {
 }
 
 function quotaCell(a) {
+  const notice = serviceNotice(a);
   if (!a.has_token) {
-    return h("div.quota", {}, h("span.quota-unauth", { title: "点击右侧「授权」后即可查询反重力额度" }, "— 未授权"));
+    return h("div.quota", {}, notice, h("span.quota-unauth", { title: "点击右侧「授权」后即可查询反重力额度" }, "— 未授权"));
   }
   const q = a.quota;
   const rows = [];
@@ -266,7 +309,8 @@ function quotaCell(a) {
   }
   const hasHead = (q && q.tier) || a.quota_at;
   const errInfo = cleanQuotaError(a.quota_error);
-  return h("div.quota", {},
+  if (a.service_disabled && /服务已被停用|violation of terms of service/i.test(errInfo.text)) errInfo.text = "";
+  return h("div.quota", {}, notice,
     hasHead ? h("div.quota-head", {},
       q && q.tier ? h("span.badge.badge-tier", {}, q.tier) : null,
       a.quota_at ? h("span.quota-foot", { title: fmtTime(a.quota_at) }, `${a.quota_error ? "上次尝试" : "更新于"} ${fromNow(a.quota_at)}`) : null) : null,
@@ -493,7 +537,7 @@ function row(a) {
     }),
   );
 
-  const rowClass = ["tr", a.has_pending_password ? "row-pending" : a.status === "due" ? "row-due" : "", active.length ? "row-active" : ""].filter(Boolean).join(".");
+  const rowClass = ["tr", a.has_pending_password ? "row-pending" : a.status === "due" ? "row-due" : "", active.length ? "row-active" : "", a.service_disabled ? "row-service-disabled" : ""].filter(Boolean).join(".");
   const chips = [
     a.chrome_profile ? h("span.chip", { title: `日常 Chrome 个人资料：${a.profile_dir}\\${a.chrome_profile}` }, icon("google-chrome-logo"), a.chrome_profile) : null,
     a.proxy ? h("span.chip", { title: a.chrome_profile ? "代理（仅用于查额度）" : "代理" }, icon("globe"), a.proxy) : null,
@@ -861,8 +905,9 @@ function render() {
   $("#chrome-banner").hidden = linked === 0;
   $("#chrome-banner-count").textContent = linked;
 
-  // 排序：待确认新密码 > 该改密 > 风控中（按剩余天数升序） > 已改密
+  // 排序：服务停用 > 待确认新密码 > 该改密 > 风控中（按剩余天数升序） > 已改密
   const list = all.filter(matches).sort((x, y) =>
+    Number(y.service_disabled) - Number(x.service_disabled) ||
     Number(y.has_pending_password) - Number(x.has_pending_password) ||
     statusOrder[x.status] - statusOrder[y.status] ||
     x.risk_left - y.risk_left || x.id - y.id);
@@ -948,12 +993,11 @@ function refreshCred(id, focusSel) {
 }
 
 async function copyText(text, okMsg, triggerEl) {
-  try {
-    await navigator.clipboard.writeText(text);
+  if (await copyToClipboard(text)) {
     flashCopied(triggerEl);
     toast(okMsg);
-  } catch (e) {
-    toast(`复制失败：${e.message}`, true);
+  } else {
+    toast("复制失败：浏览器未允许访问剪贴板", true);
   }
 }
 

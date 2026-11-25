@@ -148,8 +148,58 @@ function accountCard(c, acc) {
   return h("section.mini-card", {},
     head,
     h("div.mini-actions", {}, picker, next),
+    miniServiceNotice(acc),
     mini.picking ? pickerList(c) : null,
     mini.confirming ? confirmBar() : null);
+}
+
+async function miniServiceAction(acc, action) {
+  if (mini.busy) return;
+  mini.busy = true;
+  render();
+  status(action === "appeal" ? "正在打开官方申诉页…" : "正在检测 Antigravity 服务…");
+  try {
+    if (action === "appeal") {
+      const r = await api("POST", `/api/accounts/${acc.id}/appeal`);
+      await load();
+      const message = `已在 ${acc.email} 的浏览器中打开官方申诉页`;
+      status(r.warning ? `${message}。${r.warning}` : message, Boolean(r.warning));
+    } else {
+      const r = await api("POST", `/api/accounts/${acc.id}/service-check`);
+      mini.accounts = r.accounts;
+      status(r.message, r.status === "disabled");
+    }
+  } catch (e) {
+    status(e.message, true);
+    await load().catch((err) => status(err.message, true));
+  } finally {
+    mini.busy = false;
+    render();
+  }
+}
+
+function miniServiceNotice(acc) {
+  if (!acc || !acc.service_disabled) return null;
+  const appealed = acc.appeal_at > 0;
+  return h("div.mini-service", { role: "note" },
+    h("strong", {}, appealed ? "Antigravity 申诉审核中" : "Antigravity 已停用"),
+    h("p", {}, "该账号的对话服务已被 Google 限制。"),
+    acc.service_error_id ? h("button.mini-service-error", {
+      type: "button", title: "复制 Error ID",
+      onclick: async () => {
+        if (await copyToClipboard(acc.service_error_id)) status("Error ID 已复制");
+        else status("复制失败：浏览器未允许访问剪贴板", true);
+      },
+    }, `Error ID: ${acc.service_error_id}`) : null,
+    h("div.mini-service-actions", {},
+      h("button.btn.btn-sm.btn-soft-danger", {
+        type: "button", disabled: mini.busy,
+        onclick: () => miniServiceAction(acc, "appeal"),
+      }, appealed ? "再次打开申诉" : "去申诉"),
+      h("button.btn.btn-sm.btn-ghost", {
+        type: "button", disabled: mini.busy,
+        onclick: () => miniServiceAction(acc, "check"),
+      }, "重新检测")));
 }
 
 function pickerList(c) {

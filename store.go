@@ -49,6 +49,11 @@ type Account struct {
 
 	DeviceProfile string `json:"-"` // 切号时写给 Antigravity 的设备指纹（deviceProfile 的 JSON），空 = 还没切过
 	SwitchedAt    int64  `json:"-"` // 最近一次被切成客户端当前账号的时间（Unix 秒），「切下个」按它轮换
+
+	ServiceDisabled  bool   `json:"service_disabled"`   // 有明确的 Antigravity ToS 停用证据
+	ServiceErrorID   string `json:"service_error_id"`   // Google 返回的 Error ID；没有就不伪造
+	AppealAt         int64  `json:"appeal_at"`          // 最近一次成功打开官方申诉页的时间（Unix 秒）
+	ServiceCheckedAt int64  `json:"service_checked_at"` // 最近一次服务检测时间（Unix 秒）
 }
 
 type Settings struct {
@@ -255,6 +260,10 @@ CREATE TABLE IF NOT EXISTS settings (
 		{"previous_password", `TEXT NOT NULL DEFAULT ''`},
 		{"device_profile", `TEXT NOT NULL DEFAULT ''`},
 		{"switched_at", `INTEGER NOT NULL DEFAULT 0`},
+		{"service_disabled", `INTEGER NOT NULL DEFAULT 0`},
+		{"service_error_id", `TEXT NOT NULL DEFAULT ''`},
+		{"appeal_at", `INTEGER NOT NULL DEFAULT 0`},
+		{"service_checked_at", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if err := addColumnIfMissing(db, "accounts", c.name, c.def); err != nil {
 			db.Close()
@@ -288,13 +297,15 @@ func addColumnIfMissing(db *sql.DB, table, column, def string) error {
 }
 
 const accountCols = `id, email, note, tags, login_date, risk_days, pwd_changed_date, proxy, profile_dir, chrome_profile, created_at,
-	refresh_token, quota_json, quota_error, quota_at, password, totp_secret, pending_password, previous_password, device_profile, switched_at`
+	refresh_token, quota_json, quota_error, quota_at, password, totp_secret, pending_password, previous_password, device_profile, switched_at,
+	service_disabled, service_error_id, appeal_at, service_checked_at`
 
 func scanAccount(row interface{ Scan(...any) error }) (Account, error) {
 	var a Account
 	var tagsRaw string
 	err := row.Scan(&a.ID, &a.Email, &a.Note, &tagsRaw, &a.LoginDate, &a.RiskDays, &a.PwdChangedDate, &a.Proxy, &a.ProfileDir, &a.ChromeProfile, &a.CreatedAt,
-		&a.RefreshToken, &a.QuotaJSON, &a.QuotaError, &a.QuotaAt, &a.Password, &a.TotpSecret, &a.PendingPassword, &a.PreviousPassword, &a.DeviceProfile, &a.SwitchedAt)
+		&a.RefreshToken, &a.QuotaJSON, &a.QuotaError, &a.QuotaAt, &a.Password, &a.TotpSecret, &a.PendingPassword, &a.PreviousPassword, &a.DeviceProfile, &a.SwitchedAt,
+		&a.ServiceDisabled, &a.ServiceErrorID, &a.AppealAt, &a.ServiceCheckedAt)
 	a.Tags = decodeTags(tagsRaw)
 	return a, err
 }
@@ -414,6 +425,25 @@ func (s *Store) SetQuota(id int64, info *QuotaInfo, queryErr error) error {
 		return err
 	}
 	return affectedOne(s.db.Exec(`UPDATE accounts SET quota_json = ?, quota_error = '', quota_at = ? WHERE id = ?`, string(raw), now, id))
+}
+
+func (s *Store) SetServiceDisabled(id int64, errorID string) error {
+	now := time.Now().Unix()
+	return affectedOne(s.db.Exec(`UPDATE accounts SET service_disabled = 1,
+		service_error_id = CASE WHEN ? = '' THEN service_error_id ELSE ? END,
+		service_checked_at = ? WHERE id = ?`, errorID, errorID, now, id))
+}
+
+func (s *Store) SetServiceChecked(id int64) error {
+	return affectedOne(s.db.Exec(`UPDATE accounts SET service_checked_at = ? WHERE id = ?`, time.Now().Unix(), id))
+}
+
+func (s *Store) MarkAppeal(id int64) error {
+	return affectedOne(s.db.Exec(`UPDATE accounts SET appeal_at = ? WHERE id = ?`, time.Now().Unix(), id))
+}
+
+func (s *Store) ClearServiceDisabled(id int64) error {
+	return affectedOne(s.db.Exec(`UPDATE accounts SET service_disabled = 0, service_error_id = '', appeal_at = 0, service_checked_at = ? WHERE id = ?`, time.Now().Unix(), id))
 }
 
 func (s *Store) SetPasswordChanged(id int64, date string) error {
