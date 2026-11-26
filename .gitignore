@@ -1,3 +1,5 @@
 /dist/
 /data/
 /google-account-manager
+/frontend/node_modules/
+/frontend/dist/

@@ -14,6 +14,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -190,6 +191,7 @@ var ui struct {
 	// creating 为 true 表示正在创建 WebView2：创建期间 Embed 会在内部跑消息循环，这时再收到托盘点击
 	// 会重入、嵌套再创建一个（本机见过连点托盘后堆出 9 个空小窗、一个都没显示出来）。
 	creating bool
+	dark     bool // 与页面当前生效的浅色/深色一致，同步给 DWM 标题栏与边框
 }
 
 var trayHwnd atomic.Uintptr
@@ -334,6 +336,7 @@ func newWebWindow(mini bool) *webWindow {
 	if hwnd == 0 {
 		return nil
 	}
+	applyWindowTheme(hwnd, mini, ui.dark)
 	ww := &webWindow{hwnd: hwnd, mini: mini}
 	ui.windows[hwnd] = ww
 	if !mini {
@@ -355,26 +358,55 @@ func newWebWindow(mini bool) *webWindow {
 	}
 	ww.view = view
 	view.Resize()
-	page := ui.pageURL
+	view.Init("window.gamShell='win'")
+	page := ui.pageURL + "?shell=win"
 	if mini {
-		page += "mini.html"
+		page = ui.pageURL + "mini.html?shell=win"
 	}
 	view.Navigate(page)
 	return ww
 }
 
+// applyWindowTheme 把页面当前浅色/深色同步给 Windows 10/11 标题栏与边框（旧版系统自动忽略不支持的属性）。
+func applyWindowTheme(hwnd uintptr, mini, dark bool) {
+	if hwnd == 0 {
+		return
+	}
+	var useDark uint32
+	caption := uint32(0x00F4F2F2) // COLORREF BGR = #F2F2F4（与页面浅色 --tray 一致）
+	if dark {
+		useDark = 1
+		caption = 0x000D0B0B // COLORREF BGR = #0B0B0D（与页面深色 --tray 一致）
+	}
+	// 20 = DWMWA_USE_IMMERSIVE_DARK_MODE；35 = DWMWA_CAPTION_COLOR（Windows 11 起支持）
+	call(pDwmSetWindowAttribute, hwnd, 20, uintptr(unsafe.Pointer(&useDark)), 4)
+	if !mini {
+		call(pDwmSetWindowAttribute, hwnd, 35, uintptr(unsafe.Pointer(&caption)), 4)
+	}
+}
+
 // onWebMessage 处理页面通过 chrome.webview.postMessage 发来的指令。
 func onWebMessage(w *webWindow, m string) {
-	switch m {
-	case "mini:hide":
+	switch {
+	case m == "mini:hide":
 		hideMini()
-	case "main:show":
+	case m == "main:show":
 		if w.mini {
 			hideMini()
 		}
 		showMain()
-	case "app:quit":
+	case m == "app:quit":
 		call(pPostQuitMessage, 0)
+	case strings.HasPrefix(m, "dwm:"):
+		ui.dark = strings.TrimPrefix(m, "dwm:") == "dark"
+		if ui.main != nil {
+			applyWindowTheme(ui.main.hwnd, false, ui.dark)
+		}
+		if ui.mini != nil {
+			applyWindowTheme(ui.mini.hwnd, true, ui.dark)
+		}
+	default:
+		// window:drag / window:zoom / clip: / theme: 仅 macOS 外壳用到，忽略
 	}
 }
 

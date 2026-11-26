@@ -5,53 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>额度小窗</title>
-<script>
-(() => {
-  try {
-    const t = localStorage.getItem("gam-theme");
-    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-  } catch {}
-})();
-</script>
-<link rel="stylesheet" href="style.css">
-<link rel="stylesheet" href="mini.css">
+<script src="./boot.js"></script>
+  <script type="module" crossorigin src="./assets/mini-DmugRwT0.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/theme-CWqrWcZn.js">
+  <link rel="stylesheet" crossorigin href="./assets/theme-CNNXULnN.css">
 </head>
-<body class="mini-body">
-<div class="mini">
-  <header class="mini-head">
-    <div class="mini-tabs" id="mini-tabs" role="tablist" aria-label="Antigravity 客户端"></div>
-    <div class="mini-tools">
-      <button id="mini-refresh" class="btn-icon btn-sm" type="button" title="刷新当前账号的额度" aria-label="刷新当前账号的额度">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-arrows-clockwise"/></svg>
-      </button>
-      <button id="mini-pin" class="btn-icon btn-sm" type="button" aria-pressed="false">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-push-pin"/></svg>
-      </button>
-      <button id="mini-close" class="btn-icon btn-sm" type="button" title="收起" aria-label="收起">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-x"/></svg>
-      </button>
-    </div>
-  </header>
-
-  <div class="mini-main" id="mini-main" role="tabpanel" tabindex="0"></div>
-  <p class="mini-status" id="mini-status" role="status"></p>
-
-  <footer class="mini-foot">
-    <label class="mini-toggle" title="开启后，关闭主控制台会直接释放它占用的内存，下次打开稍慢">
-      <input type="checkbox" id="mini-light">
-      <span class="mini-switch" aria-hidden="true"></span>
-      <span>轻量模式</span>
-    </label>
-    <button id="mini-open" class="btn btn-sm" type="button">
-      <svg class="icon" aria-hidden="true"><use href="icons.svg#i-arrows-out-simple"/></svg>
-      <span>打开主控制台</span>
-    </button>
-    <button id="mini-quit" class="btn-icon btn-sm" type="button" title="退出程序" aria-label="退出程序">
-      <svg class="icon" aria-hidden="true"><use href="icons.svg#i-power"/></svg>
-    </button>
-  </footer>
-</div>
-<script src="common.js"></script>
-<script src="mini.js"></script>
+<body class="is-mini">
+<div id="root"></div>
 </body>
 </html>

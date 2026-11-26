@@ -1,0 +1,389 @@
+@import "tailwindcss";
+
+/* ───────────── 设计令牌 ─────────────
+ * 托盘（微内凹底色）包裹凸起的纯白表面；同心圆角：外 = 内 + 层间内边距。
+ * 浅色 / 深色只换变量，组件里只用语义名。
+ */
+:root {
+  color-scheme: light;
+  --tray: #f2f2f4;
+  --tray-deep: #ebebee;
+  --surface: #ffffff;
+  --surface-2: #f7f7f9;
+  --seg-thumb: #ffffff;
+  --fill: rgb(118 118 128 / 0.1);
+  --fill-strong: rgb(118 118 128 / 0.16);
+  --line: rgb(0 0 0 / 0.07);
+  --line-strong: rgb(0 0 0 / 0.11);
+  --text: #111113;
+  --text-2: #5d5d66;
+  --text-3: #8d8d96;
+  --accent: #0a6cff;
+  --accent-hover: #005ae0;
+  --accent-soft: rgb(10 108 255 / 0.1);
+  --accent-fg: #ffffff;
+  --warn: #a35f00;
+  --warn-dot: #ff9f0a;
+  --warn-soft: rgb(255 159 10 / 0.14);
+  --danger: #d1242f;
+  --danger-dot: #ff3b30;
+  --danger-soft: rgb(255 59 48 / 0.1);
+  --ok: #1a7f37;
+  --ok-dot: #34c759;
+  --ok-soft: rgb(52 199 89 / 0.13);
+  --violet: #6e3ad8;
+  --violet-soft: rgb(124 58 237 / 0.1);
+  --scrim: rgb(20 20 24 / 0.18);
+  --shadow-raised: 0 0 0 0.5px rgb(0 0 0 / 0.08), 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 10px -2px rgb(0 0 0 / 0.05);
+  --shadow-pop: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 12px 32px -8px rgb(0 0 0 / 0.2), 0 4px 12px -4px rgb(0 0 0 / 0.1);
+  --shadow-thumb: 0 0 0 0.5px rgb(0 0 0 / 0.06), 0 1px 3px rgb(0 0 0 / 0.1), 0 1px 1px rgb(0 0 0 / 0.04);
+  --tray-inset: inset 0 1px 2px rgb(0 0 0 / 0.045), inset 0 0 0 0.5px rgb(0 0 0 / 0.05);
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --tray: #0b0b0d;
+  --tray-deep: #060607;
+  --surface: #17171a;
+  --surface-2: #1d1d21;
+  --seg-thumb: #26262c;
+  --fill: rgb(118 118 128 / 0.2);
+  --fill-strong: rgb(118 118 128 / 0.28);
+  --line: rgb(255 255 255 / 0.065);
+  --line-strong: rgb(255 255 255 / 0.11);
+  --text: #f4f4f5;
+  --text-2: #a3a3ad;
+  --text-3: #6f6f79;
+  --accent: #3b8bff;
+  --accent-hover: #5a9dff;
+  --accent-soft: rgb(59 139 255 / 0.16);
+  --warn: #ffb340;
+  --warn-soft: rgb(255 159 10 / 0.16);
+  --danger: #ff6b63;
+  --danger-soft: rgb(255 69 58 / 0.16);
+  --ok: #4ade80;
+  --ok-soft: rgb(48 209 88 / 0.15);
+  --violet: #b197fc;
+  --violet-soft: rgb(167 139 250 / 0.16);
+  --scrim: rgb(0 0 0 / 0.42);
+  --shadow-raised: 0 0 0 0.5px rgb(255 255 255 / 0.07), inset 0 0.5px 0 rgb(255 255 255 / 0.05), 0 2px 8px -2px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 16px 40px -8px rgb(0 0 0 / 0.65), 0 4px 12px -4px rgb(0 0 0 / 0.5);
+  --shadow-thumb: 0 0 0 0.5px rgb(255 255 255 / 0.08), inset 0 0.5px 0 rgb(255 255 255 / 0.08), 0 1px 3px rgb(0 0 0 / 0.5);
+  --tray-inset: inset 0 1px 2px rgb(0 0 0 / 0.5), inset 0 0 0 0.5px rgb(255 255 255 / 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --tray: #0b0b0d;
+    --tray-deep: #060607;
+    --surface: #17171a;
+    --surface-2: #1d1d21;
+    --seg-thumb: #26262c;
+    --fill: rgb(118 118 128 / 0.2);
+    --fill-strong: rgb(118 118 128 / 0.28);
+    --line: rgb(255 255 255 / 0.065);
+    --line-strong: rgb(255 255 255 / 0.11);
+    --text: #f4f4f5;
+    --text-2: #a3a3ad;
+    --text-3: #6f6f79;
+    --accent: #3b8bff;
+    --accent-hover: #5a9dff;
+    --accent-soft: rgb(59 139 255 / 0.16);
+    --warn: #ffb340;
+    --warn-soft: rgb(255 159 10 / 0.16);
+    --danger: #ff6b63;
+    --danger-soft: rgb(255 69 58 / 0.16);
+    --ok: #4ade80;
+    --ok-soft: rgb(48 209 88 / 0.15);
+    --violet: #b197fc;
+    --violet-soft: rgb(167 139 250 / 0.16);
+    --scrim: rgb(0 0 0 / 0.42);
+    --shadow-raised: 0 0 0 0.5px rgb(255 255 255 / 0.07), inset 0 0.5px 0 rgb(255 255 255 / 0.05), 0 2px 8px -2px rgb(0 0 0 / 0.5);
+    --shadow-pop: 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 16px 40px -8px rgb(0 0 0 / 0.65), 0 4px 12px -4px rgb(0 0 0 / 0.5);
+    --shadow-thumb: 0 0 0 0.5px rgb(255 255 255 / 0.08), inset 0 0.5px 0 rgb(255 255 255 / 0.08), 0 1px 3px rgb(0 0 0 / 0.5);
+    --tray-inset: inset 0 1px 2px rgb(0 0 0 / 0.5), inset 0 0 0 0.5px rgb(255 255 255 / 0.04);
+  }
+}
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "Cascadia Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  --color-tray: var(--tray);
+  --color-tray-deep: var(--tray-deep);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-warn: var(--warn);
+  --color-warn-dot: var(--warn-dot);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-dot: var(--danger-dot);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-dot: var(--ok-dot);
+  --color-ok-soft: var(--ok-soft);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+
+  --text-2xs: 10.5px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11.5px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12.5px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-md: 14px;
+  --text-md--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 22px;
+  --text-xl: 20px;
+  --text-xl--line-height: 26px;
+
+  --shadow-raised: var(--shadow-raised);
+  --shadow-pop: var(--shadow-pop);
+  --shadow-thumb: var(--shadow-thumb);
+  --shadow-tray: var(--tray-inset);
+  --ease-out: var(--ease-out);
+}
+
+/* ───────────── 基础 ───────────── */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    background: var(--tray);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 20px;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+    font-feature-settings: "kern";
+  }
+  body.is-mini {
+    background: transparent;
+  }
+  button {
+    cursor: default;
+    font: inherit;
+    color: inherit;
+  }
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+}
+
+/* ───────────── 工具类 ───────────── */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "kern";
+}
+@utility selectable {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+@utility row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+@utility thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--fill-strong) transparent;
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--fill-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+@utility hairline-b {
+  box-shadow: inset 0 -0.5px 0 var(--line-strong);
+}
+@utility hairline-t {
+  box-shadow: inset 0 0.5px 0 var(--line-strong);
+}
+
+/* 标签色：8 个色相，浅深色各一套。 */
+.tag {
+  color: var(--h-fg);
+  background: var(--h-bg);
+}
+.tag .tag-dot {
+  background: var(--h-dot);
+}
+.tag-active {
+  box-shadow: inset 0 0 0 1px var(--h-dot);
+}
+[data-hue="blue"] { --h-fg: #1d5fd6; --h-bg: rgb(59 130 246 / 0.11); --h-dot: #3b82f6; }
+[data-hue="violet"] { --h-fg: #6d3fd9; --h-bg: rgb(139 92 246 / 0.11); --h-dot: #8b5cf6; }
+[data-hue="emerald"] { --h-fg: #0f7a55; --h-bg: rgb(16 185 129 / 0.12); --h-dot: #10b981; }
+[data-hue="amber"] { --h-fg: #9a5b00; --h-bg: rgb(245 158 11 / 0.14); --h-dot: #f59e0b; }
+[data-hue="rose"] { --h-fg: #c0264a; --h-bg: rgb(244 63 94 / 0.11); --h-dot: #f43f5e; }
+[data-hue="cyan"] { --h-fg: #0d7590; --h-bg: rgb(6 182 212 / 0.12); --h-dot: #06b6d4; }
+[data-hue="orange"] { --h-fg: #b5470b; --h-bg: rgb(249 115 22 / 0.12); --h-dot: #f97316; }
+[data-hue="indigo"] { --h-fg: #4044c9; --h-bg: rgb(99 102 241 / 0.12); --h-dot: #6366f1; }
+:root[data-theme="dark"] [data-hue="blue"] { --h-fg: #8ab4ff; --h-bg: rgb(59 130 246 / 0.18); }
+:root[data-theme="dark"] [data-hue="violet"] { --h-fg: #c4b0ff; --h-bg: rgb(139 92 246 / 0.2); }
+:root[data-theme="dark"] [data-hue="emerald"] { --h-fg: #6ee7b7; --h-bg: rgb(16 185 129 / 0.17); }
+:root[data-theme="dark"] [data-hue="amber"] { --h-fg: #fcd34d; --h-bg: rgb(245 158 11 / 0.17); }
+:root[data-theme="dark"] [data-hue="rose"] { --h-fg: #fda4af; --h-bg: rgb(244 63 94 / 0.18); }
+:root[data-theme="dark"] [data-hue="cyan"] { --h-fg: #67e8f9; --h-bg: rgb(6 182 212 / 0.17); }
+:root[data-theme="dark"] [data-hue="orange"] { --h-fg: #fdba74; --h-bg: rgb(249 115 22 / 0.17); }
+:root[data-theme="dark"] [data-hue="indigo"] { --h-fg: #a5b4fc; --h-bg: rgb(99 102 241 / 0.2); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) [data-hue="blue"] { --h-fg: #8ab4ff; --h-bg: rgb(59 130 246 / 0.18); }
+  :root:not([data-theme="light"]) [data-hue="violet"] { --h-fg: #c4b0ff; --h-bg: rgb(139 92 246 / 0.2); }
+  :root:not([data-theme="light"]) [data-hue="emerald"] { --h-fg: #6ee7b7; --h-bg: rgb(16 185 129 / 0.17); }
+  :root:not([data-theme="light"]) [data-hue="amber"] { --h-fg: #fcd34d; --h-bg: rgb(245 158 11 / 0.17); }
+  :root:not([data-theme="light"]) [data-hue="rose"] { --h-fg: #fda4af; --h-bg: rgb(244 63 94 / 0.18); }
+  :root:not([data-theme="light"]) [data-hue="cyan"] { --h-fg: #67e8f9; --h-bg: rgb(6 182 212 / 0.17); }
+  :root:not([data-theme="light"]) [data-hue="orange"] { --h-fg: #fdba74; --h-bg: rgb(249 115 22 / 0.17); }
+  :root:not([data-theme="light"]) [data-hue="indigo"] { --h-fg: #a5b4fc; --h-bg: rgb(99 102 241 / 0.2); }
+}
+
+/* 2FA 倒计时环：纯 CSS 线性动画，由 --period / --elapsed 控制，不在 JS 里逐帧计算。 */
+@keyframes ring-drain {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--len);
+  }
+}
+.ring-drain {
+  stroke-dasharray: var(--len);
+  animation: ring-drain calc(var(--period) * 1s) linear forwards;
+  animation-delay: calc(var(--elapsed) * -1s);
+}
+
+/* 运行中的克制流光（Border Beam）：只用在「正在后台刷新」的按钮上。 */
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes beam-spin {
+  to {
+    --beam-angle: 360deg;
+  }
+}
+.beam {
+  position: relative;
+  isolation: isolate;
+}
+.beam::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--beam-angle), transparent 0deg, transparent 250deg, var(--accent) 310deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: beam-spin 1.6s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.breathe {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--fill) 0%, var(--fill-strong) 40%, var(--fill) 80%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .beam::before {
+    display: none;
+  }
+  .breathe,
+  .skeleton {
+    animation: none;
+  }
+  .spin {
+    animation-duration: 2.4s;
+  }
+}

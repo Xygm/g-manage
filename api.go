@@ -160,6 +160,9 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/ui-prefs", a.getUIPrefs)
 	mux.HandleFunc("PUT /api/ui-prefs", a.putUIPrefs)
 	mux.HandleFunc("POST /api/ui/show-main", a.showMainWindow)
+	mux.HandleFunc("POST /api/system/full-disk-access", a.openFullDiskAccess)
+	mux.HandleFunc("POST /api/system/reveal-app", a.revealApp)
+	mux.HandleFunc("GET /api/app", a.appInfo)
 	return a.guard(mux)
 }
 
@@ -196,6 +199,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, ErrVaultLocked):
 		status = http.StatusUnauthorized
+	case errors.Is(err, errChromePermission):
+		status = http.StatusForbidden
 	case errors.Is(err, errTooManyTries):
 		status = http.StatusTooManyRequests
 	}
