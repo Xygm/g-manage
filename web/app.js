@@ -310,10 +310,16 @@ function quotaCell(a) {
   const hasHead = (q && q.tier) || a.quota_at;
   const errInfo = cleanQuotaError(a.quota_error);
   if (a.service_disabled && /服务已被停用|violation of terms of service/i.test(errInfo.text)) errInfo.text = "";
+  const checkEntry = !a.service_disabled ? button({
+    label: "检测服务", iconName: "shield-check", variant: ".btn-ghost.service-check-entry",
+    title: "先查接口；当前 CLI 是这个账号时再发一条最小真实对话",
+    onClick: (e) => checkAccountService(a, e.currentTarget),
+  }) : null;
   return h("div.quota", {}, notice,
-    hasHead ? h("div.quota-head", {},
+    (hasHead || checkEntry) ? h("div.quota-head", {},
       q && q.tier ? h("span.badge.badge-tier", {}, q.tier) : null,
-      a.quota_at ? h("span.quota-foot", { title: fmtTime(a.quota_at) }, `${a.quota_error ? "上次尝试" : "更新于"} ${fromNow(a.quota_at)}`) : null) : null,
+      a.quota_at ? h("span.quota-foot", { title: fmtTime(a.quota_at) }, `${a.quota_error ? "上次尝试" : "更新于"} ${fromNow(a.quota_at)}`) : null,
+      checkEntry) : null,
     rows.length ? h("div.quota-grid", {}, rows)
       : q ? h("p.muted", {}, "暂无额度数据")
       : a.quota_error ? null
