@@ -174,7 +174,7 @@ func summarizeGoogleError(status int, body string) string {
 			return "账号需要完成安全验证（VALIDATION_REQUIRED）：请在该账号浏览器中完成验证后刷新额度 " + actionURL
 		case reason == "SUBSCRIPTION_REQUIRED" || strings.Contains(msg, "#3501"):
 			return "未开通可用许可（#3501）：该账号未获得免费档资格且无有效订阅，请检查代理节点地区与 Google 账号归属国家"
-		case reason == "ACCOUNT_DISABLED" || strings.Contains(lowerMsg, "violation of terms of service"):
+		case reason == "ACCOUNT_DISABLED" || reason == "TOS_VIOLATION" || strings.Contains(lowerMsg, "violation of terms of service"):
 			return "该 Google 账号的服务已被停用（违反服务条款），需在浏览器中提交申诉"
 		case status == http.StatusUnauthorized || rpc.Error.Status == "UNAUTHENTICATED":
 			return "登录凭证已失效（401），请点右侧「重新授权」"
@@ -659,18 +659,23 @@ func (g *googleClient) fetchQuota(ctx context.Context, refreshToken string) (Quo
 	if err != nil {
 		return QuotaInfo{}, err
 	}
+	info, _, err := g.fetchQuotaWithAccess(ctx, access)
+	return info, err
+}
+
+func (g *googleClient) fetchQuotaWithAccess(ctx context.Context, access string) (QuotaInfo, string, error) {
 	project, tier, ineligible, err := g.resolveCodeAssist(ctx, access)
 	if err != nil {
-		return QuotaInfo{}, err
+		return QuotaInfo{}, "", err
 	}
 	groups, err := g.quotaSummary(ctx, access, project)
 	if err != nil {
 		var ge *googleError
 		if errors.As(err, &ge) && ge.status == http.StatusForbidden && len(ineligible) > 0 &&
 			(strings.Contains(ge.body, "SUBSCRIPTION_REQUIRED") || strings.Contains(ge.body, "#3501")) {
-			return QuotaInfo{}, formatIneligibleError(ineligible)
+			return QuotaInfo{}, project, formatIneligibleError(ineligible)
 		}
-		return QuotaInfo{}, fmt.Errorf("查询额度失败：%w", err)
+		return QuotaInfo{}, project, fmt.Errorf("查询额度失败：%w", err)
 	}
-	return QuotaInfo{Tier: tier, Groups: groups}, nil
+	return QuotaInfo{Tier: tier, Groups: groups}, project, nil
 }

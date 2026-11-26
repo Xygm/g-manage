@@ -266,7 +266,7 @@ function serviceNotice(a) {
         button({ label: appealed ? "再次打开申诉" : "去申诉", iconName: "shield-check", variant: ".btn-soft-danger",
           title: "在这个账号的独立浏览器中打开 Google 官方申诉表单", onClick: (e) => appealAccount(a, e.currentTarget) }),
         button({ label: "重新检测", iconName: "arrows-clockwise", variant: ".btn-ghost",
-          title: "先查接口；当前 CLI 是这个账号时再发一条最小真实对话", onClick: (e) => checkAccountService(a, e.currentTarget) }),
+          title: "直接用该账号发送一条最小真实对话，检测服务是否已恢复（无需切号）", onClick: (e) => checkAccountService(a, e.currentTarget) }),
         appealed ? h("span.service-time", { title: fmtTime(a.appeal_at) }, `${fromNow(a.appeal_at)}已提交`) : null)));
 }
 
@@ -315,7 +315,7 @@ function quotaCell(a) {
   if (a.service_disabled && /服务已被停用|violation of terms of service/i.test(errInfo.text)) errInfo.text = "";
   const checkEntry = !a.service_disabled ? button({
     label: "检测服务", iconName: "shield-check", variant: ".btn-ghost.service-check-entry",
-    title: "先查接口；当前 CLI 是这个账号时再发一条最小真实对话",
+    title: "直接用该账号发送一条最小真实对话，检测 Antigravity 是否可用（无需切号）",
     onClick: (e) => checkAccountService(a, e.currentTarget),
   }) : null;
   return h("div.quota", {}, notice,

@@ -28,7 +28,7 @@ type App struct {
 
 	browserLocks   sync.Map   // 邮箱 → *sync.Mutex：同一账号的浏览器资料同时只做一件事（写密码库 / 启动）
 	switchMu       sync.Mutex // 同一时间只做一次切号（会关闭 / 重启客户端、改凭据管理器）
-	serviceCheckMu sync.Mutex // 同一时间只运行一个 agy 对话探针
+	serviceCheckMu sync.Mutex // 同一时间只运行一个对话探针
 }
 
 type pendingAuth struct {
