@@ -356,7 +356,7 @@ var tierRank = map[string]int{"ULTRA": 3, "PRO": 2, "ENTERPRISE": 1}
 
 // nextScore 判断账号能不能作为「切下个」的目标，能的话返回目标池的剩余比例。
 func nextScore(acc Account, st Settings, now string, currentID int64) (float64, string, bool) {
-	if acc.ID == currentID || acc.RefreshToken == "" || acc.QuotaError != "" || acc.QuotaJSON == "" {
+	if acc.ID == currentID || acc.ServiceDisabled || acc.RefreshToken == "" || acc.QuotaError != "" || acc.QuotaJSON == "" {
 		return 0, "", false
 	}
 	if status, _ := accountStatus(acc, now); status == statusRisk {

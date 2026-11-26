@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -18,6 +19,9 @@ import (
 )
 
 const avatarFile = "Google Profile Picture.png"
+
+// errChromePermission 表示 macOS TCC 等系统隐私机制拒绝读取 Chrome 资料目录。
+var errChromePermission = errors.New("没有读取 Chrome 资料目录的权限")
 
 type ChromeProfile struct {
 	Dir       string `json:"dir"`        // 文件夹名，如 "Profile 11"
@@ -53,6 +57,9 @@ func chromeUserData(st Settings) string {
 func readChromeProfiles(userData string) ([]ChromeProfile, error) {
 	raw, err := os.ReadFile(filepath.Join(userData, "Local State"))
 	if err != nil {
+		if runtime.GOOS == "darwin" && errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("%w（%s）：macOS 拦截了对 Chrome 资料目录的读取，请授予「完全磁盘访问权限」后重启程序再试", errChromePermission, userData)
+		}
 		return nil, fmt.Errorf("读取 Chrome 资料列表失败（%s）：%w", userData, err)
 	}
 	var ls struct {
@@ -272,4 +279,55 @@ func (a *App) accountAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveAvatar(w, r, a.avatarPath(acc))
+}
+
+func currentAppBundlePath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	for p := exe; p != "/" && p != "."; p = filepath.Dir(p) {
+		if strings.HasSuffix(p, ".app") {
+			return p
+		}
+	}
+	return exe
+}
+
+// openFullDiskAccess 在 macOS 上直接打开「系统设置 → 隐私与安全性 → 完全磁盘访问权限」。
+func (a *App) openFullDiskAccess(w http.ResponseWriter, r *http.Request) {
+	if runtime.GOOS != "darwin" {
+		writeErr(w, errors.New("仅 macOS 支持此操作"))
+		return
+	}
+	cmd := exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+	if err := cmd.Start(); err != nil {
+		writeErr(w, fmt.Errorf("打开系统设置失败：%w", err))
+		return
+	}
+	go cmd.Wait()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// revealApp 在 macOS 访达中定位当前 .app，方便拖进「完全磁盘访问权限」列表。
+func (a *App) revealApp(w http.ResponseWriter, r *http.Request) {
+	if runtime.GOOS != "darwin" {
+		writeErr(w, errors.New("仅 macOS 支持此操作"))
+		return
+	}
+	p := currentAppBundlePath()
+	if p == "" {
+		writeErr(w, errors.New("未能定位当前程序路径"))
+		return
+	}
+	cmd := exec.Command("open", "-R", p)
+	if err := cmd.Start(); err != nil {
+		writeErr(w, fmt.Errorf("打开访达失败：%w", err))
+		return
+	}
+	go cmd.Wait()
+	w.WriteHeader(http.StatusNoContent)
 }

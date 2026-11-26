@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -37,7 +39,7 @@ func main() {
 		if err != nil {
 			fatal("找不到程序所在目录：" + err.Error())
 		}
-		dir = filepath.Join(filepath.Dir(exe), "data")
+		dir = defaultDataDir(exe)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fatal("创建数据目录失败：" + err.Error())
@@ -77,6 +79,17 @@ func main() {
 		}
 		return p
 	}) // 退出时返回
+}
+
+// defaultDataDir：默认放在程序旁边的 data 目录；macOS 打包成 .app 后程序在包内，
+// 改放到 ~/Library/Application Support/谷歌账号管理（包内会被替换、也可能只读）。
+func defaultDataDir(exe string) string {
+	if runtime.GOOS == "darwin" && strings.Contains(exe, ".app/Contents/MacOS") {
+		if base, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(base, "谷歌账号管理")
+		}
+	}
+	return filepath.Join(filepath.Dir(exe), "data")
 }
 
 // wakeRunningInstance 请已经在运行的实例显示主控制台（关窗后程序留在托盘，再次双击程序时用到）。

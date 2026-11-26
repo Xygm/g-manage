@@ -5,9 +5,17 @@
 # 直接从 WSL 复制过去的文件不带「来自网络」标记，Windows 不会弹 SmartScreen 拦截。
 set -euo pipefail
 cd "$(dirname "$0")"
+GO="${GO:-go}"
+
+if [ "${SKIP_FRONTEND:-}" = 1 ]; then
+	echo "跳过前端构建，使用现有的 web/"
+elif [ -d frontend/node_modules ]; then
+	npm --prefix frontend run build
+fi
+
 mkdir -p dist
 name="谷歌账号管理.exe"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui" -o "dist/$name" .
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "$GO" build -trimpath -ldflags "-s -w -H windowsgui" -o "dist/$name" .
 echo "已生成 dist/$name"
 
 if [ $# -gt 0 ]; then
