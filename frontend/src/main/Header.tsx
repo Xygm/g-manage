@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Command, Download, LockOpen, Plus, RefreshCw, Settings2, ShieldCheck } from "lucide-react";
+import { Command, Crown, Download, LockOpen, Plus, RefreshCw, Settings2, ShieldCheck } from "lucide-react";
 import { forwardRef } from "react";
-import { app, lockVault, refreshAll } from "../lib/app";
+import { app, lockVault, refreshAll, refreshPerksAll } from "../lib/app";
+import { isPaidAccount } from "../lib/health";
 import { isNativeMac, modLabel } from "../lib/bridge";
 import { useNow } from "../lib/hooks";
 import { useStore } from "../lib/store";
@@ -10,7 +11,9 @@ import { Button, IconButton, Tooltip, cx } from "../ui/button";
 
 export const Header = forwardRef<HTMLElement>(function Header(_, ref) {
   const refreshing = useStore(app, (s) => s.refreshingAll);
+  const syncingPerks = useStore(app, (s) => s.syncingAllPerks);
   const hasAuthed = useStore(app, (s) => s.accounts.some((a) => a.has_token));
+  const hasSyncablePaid = useStore(app, (s) => s.accounts.some((a) => !a.chrome_profile && isPaidAccount(a)));
   return (
     <header ref={ref} className={cx("flex h-[52px] shrink-0 items-center gap-2 pr-3", isNativeMac ? "pl-[84px]" : "pl-4")}>
       <div className="flex min-w-0 items-center gap-2.5">
@@ -32,6 +35,13 @@ export const Header = forwardRef<HTMLElement>(function Header(_, ref) {
           <kbd className="rounded-[5px] bg-surface px-1.5 font-sans text-2xs font-medium text-ink-3 shadow-[0_0_0_0.5px_var(--line-strong)]">{modLabel("K")}</kbd>
         </button>
       </Tooltip>
+      {hasSyncablePaid && (
+        <Tooltip label="从各会员号独立浏览器自动同步 Flow 积分、Colab CU 与账期">
+          <Button icon={Crown} busy={syncingPerks} onClick={refreshPerksAll} className={cx("rounded-[8px]", syncingPerks && "beam")}>
+            <span className="hidden lg:inline">{syncingPerks ? "正在同步权益" : "同步权益"}</span>
+          </Button>
+        </Tooltip>
+      )}
       {hasAuthed && (
         <Tooltip label="刷新所有已授权号的额度" kbd={modLabel("⇧R")}>
           <Button icon={RefreshCw} busy={refreshing} onClick={refreshAll} className={cx("rounded-[8px]", refreshing && "beam")}>

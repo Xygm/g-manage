@@ -1,10 +1,10 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { AlertTriangle, Download, KeyRound, Lock, Monitor, Moon, Plus, RefreshCw, Search, Settings2, SkipForward, Sun, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Crown, Download, ExternalLink, KeyRound, Lock, Monitor, Moon, Plus, RefreshCw, Search, Settings2, SkipForward, Sparkles, Sun, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { app, canSwitch, CLIENTS, copyPassword, copyTotp, isUnlocked, lockVault, openTarget, refreshAll, select, switchNext, visibleAccounts } from "../lib/app";
+import { accountById, app, canSwitch, CLIENTS, copyPassword, copyTotp, isUnlocked, lockVault, openTarget, refreshAll, refreshPerksAll, refreshPerksOne, resetListViewAuto, select, switchNext, visibleAccounts } from "../lib/app";
 import { fuzzyScore } from "../lib/format";
-import { healthLabel, healthOf } from "../lib/health";
+import { hasUrgentBilling, healthLabel, healthOf, isPaidAccount } from "../lib/health";
 import { modLabel } from "../lib/bridge";
 import { useStore } from "../lib/store";
 import { fade, spring } from "../lib/motion";
@@ -45,19 +45,47 @@ export function Palette() {
     }
   }, [open]);
 
+  const selectedId = useStore(app, (s) => s.selectedId);
+  const isCustomCols = useStore(app, (s) => s.listView.mode === "custom");
   const commands = useMemo<Cmd[]>(() => {
+    const sel = selectedId ? accountById(selectedId) : undefined;
     const cmds: Cmd[] = [
       { id: "add", icon: Plus, label: "添加账号", keywords: "新建 add", kbd: modLabel("N"), run: () => app.set({ sheet: { kind: "add" } }) },
       { id: "import", icon: Download, label: "从 Chrome 导入", keywords: "import 导入", run: () => app.set({ sheet: { kind: "import" } }) },
       { id: "refresh", icon: RefreshCw, label: "刷新所有额度", keywords: "quota 额度 刷新", kbd: modLabel("⇧R"), run: refreshAll },
       { id: "settings", icon: Settings2, label: "打开设置", keywords: "settings 设置 代理", kbd: modLabel(","), run: () => app.set({ sheet: { kind: "settings" } }) },
-      { id: "f-dis", icon: AlertTriangle, label: "只看服务停用的号", keywords: "筛选 停用 封号 申诉 disabled", run: () => app.set({ filter: "disabled", tag: "", query: "" }) },
-      { id: "f-pw", icon: KeyRound, label: "只看待改密的号", keywords: "筛选 改密 due", run: () => app.set({ filter: "password", tag: "", query: "" }) },
-      { id: "f-auth", icon: KeyRound, label: "只看授权异常的号", keywords: "筛选 授权 过期", run: () => app.set({ filter: "auth", tag: "", query: "" }) },
+    ];
+    if (accounts.some((x) => !x.chrome_profile && isPaidAccount(x))) {
+      cmds.push({ id: "sync-perks-all", icon: Crown, label: "同步所有会员号权益与积分", keywords: "perks flow colab 会员 积分 算力 同步 刷新", run: refreshPerksAll });
+    }
+    if (sel) {
+      if (!sel.chrome_profile) {
+        cmds.push({ id: "sync-perks-one", icon: RefreshCw, label: `同步 ${sel.email} 的会员权益`, keywords: "perks flow colab 同步 刷新 积分", run: () => refreshPerksOne(sel) });
+      }
+      cmds.push(
+        { id: "open-sub", icon: ExternalLink, label: `打开 ${sel.email} 的订阅管理`, keywords: "subscription google one 订阅 退订 自动续费", run: () => openTarget(sel, "subscriptions") },
+        { id: "open-flow", icon: ExternalLink, label: `打开 ${sel.email} 的 Flow`, keywords: "flow veo 视频 积分", run: () => openTarget(sel, "flow") },
+        { id: "open-colab", icon: ExternalLink, label: `打开 ${sel.email} 的 Colab`, keywords: "colab cu 计算单元 算力", run: () => openTarget(sel, "colab") },
+        { id: "open-benefits", icon: ExternalLink, label: `打开 ${sel.email} 的 API 赠金领取页`, keywords: "benefits api 赠金 10 40 100 cloud", run: () => openTarget(sel, "benefits") },
+      );
+    }
+    if (accounts.some((x) => hasUrgentBilling(x))) {
+      cmds.push({ id: "f-bill", icon: AlertTriangle, label: "只看待退订 / 即将扣费的号", keywords: "筛选 待退订 扣费 自动续费 防反撸 billing", run: () => app.set({ filter: "all", scope: "billing", tag: "", query: "" }) });
+    }
+    if (accounts.some((x) => isPaidAccount(x))) {
+      cmds.push({ id: "f-paid", icon: Crown, label: "只看 Pro / Ultra 会员号", keywords: "筛选 会员 pro ultra paid", run: () => app.set({ filter: "all", scope: "paid", tag: "", query: "" }) });
+    }
+    cmds.push(
+      { id: "f-dis", icon: AlertTriangle, label: "只看服务停用的号", keywords: "筛选 停用 封号 申诉 disabled", run: () => app.set({ filter: "disabled", scope: "all", tag: "", query: "" }) },
+      { id: "f-pw", icon: KeyRound, label: "只看待改密的号", keywords: "筛选 改密 due", run: () => app.set({ filter: "password", scope: "all", tag: "", query: "" }) },
+      { id: "f-auth", icon: KeyRound, label: "只看授权异常的号", keywords: "筛选 授权 过期", run: () => app.set({ filter: "auth", scope: "all", tag: "", query: "" }) },
       { id: "t-sys", icon: Monitor, label: "外观：跟随系统", keywords: "主题 theme 外观", run: () => setThemePref("system") },
       { id: "t-light", icon: Sun, label: "外观：浅色", keywords: "主题 theme 外观 light", run: () => setThemePref("light") },
       { id: "t-dark", icon: Moon, label: "外观：深色", keywords: "主题 theme 外观 dark 暗", run: () => setThemePref("dark") },
-    ];
+    );
+    if (isCustomCols) {
+      cmds.push({ id: "reset-cols", icon: Sparkles, label: "列表显示列：恢复智能自动", keywords: "columns 列 表头 自动 默认", run: resetListViewAuto });
+    }
     if (isUnlocked()) cmds.push({ id: "lock", icon: Lock, label: "锁上密码查看", keywords: "lock 锁", run: lockVault });
     if (canSwitch()) {
       for (const c of clients.filter((x) => x.installed)) {
@@ -65,7 +93,7 @@ export function Palette() {
       }
     }
     return cmds;
-  }, [clients, open]);
+  }, [accounts, clients, isCustomCols, open, selectedId]);
 
   const items = useMemo<Item[]>(() => {
     const s = q.trim();

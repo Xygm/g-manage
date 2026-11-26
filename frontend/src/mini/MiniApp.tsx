@@ -6,7 +6,7 @@ import {
   appealAccount, app, canSwitch, checkAccountService, CLIENTS, copyPlain, copyTotp, isNextCandidate, isUnlocked, loadAll, loadClients,
   openTarget, reloadAccounts, switchClient, switchNext, unlock, visibleAccounts,
 } from "../lib/app";
-import { fmtCountdown, fmtTime, fromNow, fuzzyScore, humanQuotaError, pct, poolRemaining, shortGroupName, tierLabel, windowLabel } from "../lib/format";
+import { effectiveTier, fmtCountdown, fmtTime, fromNow, fuzzyScore, humanQuotaError, isUltraTier, pct, poolRemaining, shortGroupName, tierLabel, windowLabel } from "../lib/format";
 import { accountNeedsAuth, comparer, healthLabel, healthOf } from "../lib/health";
 import { copyText, post, shell } from "../lib/bridge";
 import { useNow } from "../lib/hooks";
@@ -414,9 +414,9 @@ function ClientCard({ c, onPick, onCopyPassword }: { c: ClientStatus; onPick: ()
             {a ? healthLabel(a).text : c.email ? "这个号不在列表里，看不到额度" : `${meta.name} 还没登录`}
           </p>
         </div>
-        {a?.quota?.tier && !(a.service_disabled && a.appeal_at > 0) && (
-          <Pill tone="violet" className="h-5">
-            {tierLabel(a.quota.tier)}
+        {a && effectiveTier(a) && !(a.service_disabled && a.appeal_at > 0) && (
+          <Pill tone={isUltraTier(effectiveTier(a)) ? "violet" : effectiveTier(a) === "PRO" ? "accent" : "neutral"} className="h-5">
+            {tierLabel(effectiveTier(a))}
           </Pill>
         )}
       </div>

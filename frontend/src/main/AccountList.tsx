@@ -1,28 +1,37 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { AlertTriangle, Download, Globe, Plus, SearchX, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Download, Globe, Plus, SearchX, Sparkles } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { app, clientsOf, CLIENTS, copyTotp, filteredAccounts, openTarget, select } from "../lib/app";
-import { healthLabel, healthOf, type Health } from "../lib/health";
-import { humanQuotaError, pct, poolRemaining } from "../lib/format";
+import { app, clientsOf, CLIENTS, copyTotp, filteredAccounts, openTarget, select, toggleSortBy, visibleAccounts } from "../lib/app";
+import { resolveColumns, type ColSpec, type ResolvedLayout } from "../lib/columns";
+import { billingAlertOf, healthLabel, healthOf, type Health, type Sort } from "../lib/health";
+import {
+  apiCreditAmountLabel, currentMonthStr, effectiveTier, fmtCompactNum, humanQuotaError,
+  isPaidTier, pct, poolRemaining,
+} from "../lib/format";
 import { modLabel } from "../lib/bridge";
 import { useStore, shallowEqual } from "../lib/store";
 import { fade, spring } from "../lib/motion";
-import type { Account } from "../lib/types";
+import type { Account, ListColId } from "../lib/types";
 import { Button, IconButton, Tooltip, cx, useFlash } from "../ui/button";
-import { Avatar, Pill, QuotaBar, TagChip, TotpDigits, TotpRing, tagHue, type PillTone } from "../ui/display";
+import { Avatar, Pill, QuotaBar, TagChip, TierBadge, TotpDigits, TotpRing, tagHue, type PillTone } from "../ui/display";
 
+const HEADER_H = 28;
 const ROW_H = 54;
 const OVERSCAN = 8;
 
 export function AccountList() {
   const loaded = useStore(app, (s) => s.loaded);
   const loadError = useStore(app, (s) => s.loadError);
+  const allVisible = useStore(app, visibleAccounts);
   const list = useStore(app, filteredAccounts);
-  const total = useStore(app, (s) => s.accounts.length - s.hidden.length);
-  const viewKey = useStore(app, (s) => `${s.filter}|${s.tag}|${s.sort}|${s.query ? "q" : ""}`);
+  const total = allVisible.length;
+  const viewKey = useStore(app, (s) => `${s.filter}|${s.scope}|${s.tag}|${s.sort}|${s.sortDesc ? "d" : "a"}|${s.query ? "q" : ""}`);
   const filter = useStore(app, (s) => s.filter);
+  const sort = useStore(app, (s) => s.sort);
+  const sortDesc = useStore(app, (s) => s.sortDesc);
+  const listView = useStore(app, (s) => s.listView);
   const scroller = useRef<HTMLDivElement>(null);
-  const [range, setRange] = useState({ top: 0, height: 900 });
+  const [range, setRange] = useState({ top: 0, height: 900, width: 860 });
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -30,7 +39,10 @@ export function AccountList() {
     let raf = 0;
     const sync = () => {
       raf = 0;
-      setRange((prev) => (prev.top === el.scrollTop && prev.height === el.clientHeight ? prev : { top: el.scrollTop, height: el.clientHeight || 900 }));
+      const top = el.scrollTop;
+      const height = el.clientHeight || 900;
+      const width = el.clientWidth || 860;
+      setRange((prev) => (prev.top === top && prev.height === height && prev.width === width ? prev : { top, height, width }));
     };
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(sync);
@@ -50,6 +62,11 @@ export function AccountList() {
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [viewKey]);
+
+  const layout = useMemo(
+    () => resolveColumns(allVisible, range.width, listView, sort),
+    [allVisible, range.width, listView, sort],
+  );
 
   if (!loaded) return <Skeleton />;
   if (loadError) return <Empty icon={AlertTriangle} title="读不到账号数据" desc={loadError} />;
@@ -75,22 +92,45 @@ export function AccountList() {
   }
 
   const virtual = list.length > 36;
-  const start = virtual ? Math.max(0, Math.floor(range.top / ROW_H) - OVERSCAN) : 0;
-  const end = virtual ? Math.min(list.length, Math.ceil((range.top + range.height) / ROW_H) + OVERSCAN) : list.length;
+  const contentTop = Math.max(0, range.top - HEADER_H);
+  const start = virtual ? Math.max(0, Math.floor(contentTop / ROW_H) - OVERSCAN) : 0;
+  const end = virtual ? Math.min(list.length, Math.ceil((contentTop + range.height) / ROW_H) + OVERSCAN) : list.length;
   const slice = virtual ? list.slice(start, end) : list;
   const padTop = start * ROW_H;
   const padBottom = (list.length - end) * ROW_H;
+  const curMonth = currentMonthStr();
 
   return (
-    <div ref={scroller} role="listbox" aria-label="账号" className="thin-scroll @container relative h-full overflow-y-auto overscroll-contain">
+    <div ref={scroller} role="listbox" aria-label="账号" className="thin-scroll relative h-full overflow-y-auto overscroll-contain">
+      <ListHeader cols={layout.cols} count={list.length} sort={sort} sortDesc={sortDesc} />
       <LayoutGroup id={`list-${viewKey}`}>
-        <div className="relative p-1" style={virtual ? { paddingTop: padTop + 4, paddingBottom: padBottom + 4 } : undefined}>
+        <div className="relative px-1 pb-1" style={virtual ? { paddingTop: padTop + 2, paddingBottom: padBottom + 4 } : { paddingTop: 2 }}>
           {virtual ? (
-            slice.map((a) => <Row key={a.id} a={a} viewKey={viewKey} animated={false} />)
+            slice.map((a, idx) => (
+              <Row
+                key={a.id}
+                a={a}
+                nextId={list[start + idx + 1]?.id}
+                layout={layout}
+                curMonth={curMonth}
+                isLast={start + idx === list.length - 1}
+                viewKey={viewKey}
+                animated={false}
+              />
+            ))
           ) : (
             <AnimatePresence initial={false}>
-              {slice.map((a) => (
-                <Row key={a.id} a={a} viewKey={viewKey} animated />
+              {slice.map((a, idx) => (
+                <Row
+                  key={a.id}
+                  a={a}
+                  nextId={slice[idx + 1]?.id}
+                  layout={layout}
+                  curMonth={curMonth}
+                  isLast={idx === slice.length - 1}
+                  viewKey={viewKey}
+                  animated
+                />
               ))}
             </AnimatePresence>
           )}
@@ -101,7 +141,74 @@ export function AccountList() {
   );
 }
 
-/** 按行号精确滚动，虚拟滚动下即使目标行尚未挂载也能一步到位。 */
+/* ───────── 28px 吸顶微表头：自明列义 + 点击列头直接排序 ───────── */
+
+function ListHeader({
+  cols,
+  count,
+  sort,
+  sortDesc,
+}: {
+  cols: ColSpec[];
+  count: number;
+  sort: Sort;
+  sortDesc: boolean;
+}) {
+  const emailActive = sort === "email";
+  return (
+    <div
+      role="presentation"
+      className="sticky top-0 z-20 flex h-[28px] select-none items-center gap-2 bg-[color-mix(in_srgb,var(--surface)_84%,transparent)] px-3.5 text-[11px] font-medium tracking-[0.02em] text-ink-3 shadow-[inset_0_-0.5px_0_var(--line-strong)] backdrop-blur-md backdrop-saturate-150"
+    >
+      <div className="flex min-w-0 flex-1 items-center">
+        <button
+          type="button"
+          onClick={() => toggleSortBy("email")}
+          className={cx(
+            "-ml-1 inline-flex h-5 items-center gap-1 rounded-[5px] px-1 transition-colors duration-[100ms] hover:bg-fill/80 hover:text-ink-2",
+            emailActive && "font-semibold text-accent hover:text-accent",
+          )}
+        >
+          <span>账号</span>
+          <span className="font-normal tnum text-ink-3/75">{count}</span>
+          {emailActive && (sortDesc ? <ArrowUp size={10} strokeWidth={2.4} /> : <ArrowDown size={10} strokeWidth={2.4} />)}
+        </button>
+      </div>
+      {cols.map((c) => {
+        const active = !!c.sortKey && sort === c.sortKey && c.sortKey !== "smart";
+        const right = c.align === "right";
+        if (!c.sortKey) {
+          return (
+            <div key={c.id} style={{ width: c.width }} className={cx("shrink-0", right && "text-right")}>
+              {c.shortLabel}
+            </div>
+          );
+        }
+        return (
+          <div key={c.id} style={{ width: c.width }} className={cx("flex shrink-0 items-center", right ? "justify-end" : "justify-start")}>
+            <button
+              type="button"
+              title={`点击按「${c.label}」排序`}
+              onClick={() => toggleSortBy(c.sortKey!)}
+              className={cx(
+                "inline-flex h-5 items-center gap-0.5 rounded-[5px] px-1 transition-colors duration-[100ms] hover:bg-fill/80 hover:text-ink-2",
+                right ? "-mr-1" : "-ml-1",
+                active && "font-semibold text-accent hover:text-accent",
+              )}
+            >
+              {right && active && (sortDesc ? <ArrowDown size={10} strokeWidth={2.4} /> : <ArrowUp size={10} strokeWidth={2.4} />)}
+              <span>{c.shortLabel}</span>
+              {!right && active && (sortDesc ? <ArrowDown size={10} strokeWidth={2.4} /> : <ArrowUp size={10} strokeWidth={2.4} />)}
+            </button>
+          </div>
+        );
+      })}
+      <div className="w-[28px] shrink-0" aria-hidden />
+    </div>
+  );
+}
+
+/** 按行号精确滚动，并扣除 28px 吸顶表头高度，避免键盘 ↑ 切号时选中行钻到表头下面。 */
 function ScrollSelectedIntoView({ scroller, list }: { scroller: React.RefObject<HTMLDivElement | null>; list: Account[] }) {
   const id = useStore(app, (s) => s.selectedId);
   useEffect(() => {
@@ -109,9 +216,9 @@ function ScrollSelectedIntoView({ scroller, list }: { scroller: React.RefObject<
     if (!el || !id) return;
     const idx = list.findIndex((a) => a.id === id);
     if (idx < 0) return;
-    const rowTop = idx * ROW_H + 4;
+    const rowTop = HEADER_H + idx * ROW_H + 2;
     const rowBottom = rowTop + ROW_H + 4;
-    if (rowTop < el.scrollTop) el.scrollTop = Math.max(0, rowTop - 4);
+    if (rowTop < el.scrollTop + HEADER_H + 2) el.scrollTop = Math.max(0, rowTop - HEADER_H - 2);
     else if (rowBottom > el.scrollTop + el.clientHeight) el.scrollTop = rowBottom - el.clientHeight;
   }, [id, list, scroller]);
   return null;
@@ -119,18 +226,42 @@ function ScrollSelectedIntoView({ scroller, list }: { scroller: React.RefObject<
 
 const toneOf: Record<Health, PillTone> = { disabled: "danger", pending: "warn", due: "warn", revoked: "danger", unauth: "neutral", risk: "neutral", changed: "ok" };
 
-const Row = memo(function Row({ a, viewKey, animated }: { a: Account; viewKey: string; animated: boolean }) {
+const Row = memo(function Row({
+  a,
+  nextId,
+  layout,
+  curMonth,
+  isLast,
+  viewKey,
+  animated,
+}: {
+  a: Account;
+  nextId?: number;
+  layout: ResolvedLayout;
+  curMonth: string;
+  isLast: boolean;
+  viewKey: string;
+  animated: boolean;
+}) {
   const selected = useStore(app, (s) => s.selectedId === a.id);
+  const beforeSelected = useStore(app, (s) => nextId !== undefined && s.selectedId === nextId);
   const clients = useStore(app, (s) => clientsOf(s, a.id), (x, y) => x.length === y.length && x.every((c, i) => c.target === y[i].target));
   const awaiting = useStore(app, (s) => s.awaitingAuth.includes(a.id));
+  const syncingPerks = useStore(app, (s) => s.syncingPerksIds.includes(a.id) || (s.syncingAllPerks && !a.chrome_profile && isPaidTier(effectiveTier(a))));
   const flashAt = useStore(app, (s) => (s.flash?.id === a.id ? s.flash.at : 0));
   const colors = useStore(app, (s) => s.settings?.tag_colors);
   const tag = useStore(app, (s) => s.tag);
   const h = healthOf(a);
   const label = healthLabel(a);
+  const bill = billingAlertOf(a);
+  const showBill = !!bill && h !== "disabled" && h !== "pending" && (bill.urgent || h === "risk" || h === "changed");
+  const tier = a.service_disabled && a.appeal_at > 0 ? "" : effectiveTier(a);
+  const paid = isPaidTier(tier);
   const qerr = a.has_token && a.quota_error ? humanQuotaError(a.quota_error) : null;
   const g = poolRemaining(a.quota, "gemini");
   const c = poolRemaining(a.quota, "claude");
+
+  const hasSubLine = layout.hasInlineStatus || Boolean(a.note) || (layout.hasInlineTags && a.tags.length > 0);
 
   const inner = (
     <div
@@ -141,93 +272,98 @@ const Row = memo(function Row({ a, viewKey, animated }: { a: Account; viewKey: s
       onMouseDown={() => select(a.id)}
       onFocus={() => select(a.id)}
       onDoubleClick={() => openTarget(a, "browser")}
-      className="group relative flex h-[54px] items-center gap-3 rounded-[10px] px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      className={cx(
+        "group relative flex h-[54px] items-center gap-2 rounded-[10px] px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+        !selected && !beforeSelected && !isLast && "after:pointer-events-none after:absolute after:bottom-0 after:left-[48px] after:right-2.5 after:h-[0.5px] after:bg-line hover:after:opacity-0",
+      )}
     >
-      {/* 选中高亮：同一视图内在行间滑动，不跨筛选飞入 */}
-      {selected && <motion.span layoutId={`row-selection-${viewKey}`} transition={spring.snap} className="absolute inset-0 rounded-[10px] bg-accent-soft" />}
-      {!selected && <span className="absolute inset-0 rounded-[10px] transition-colors duration-[120ms] group-hover:bg-fill/60" />}
-      {flashAt > 0 && <motion.span key={flashAt} initial={{ opacity: 0.9 }} animate={{ opacity: 0, transition: { duration: 0.6, ease: "easeOut" } }} className="pointer-events-none absolute inset-0 rounded-[10px] bg-ok-soft" />}
+      {/* 选中高亮：立体浮雕微内框 + 左侧 2.5px 指示锚条 */}
+      {selected && (
+        <motion.span
+          layoutId={`row-selection-${viewKey}`}
+          transition={spring.snap}
+          className="pointer-events-none absolute inset-0 rounded-[10px] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--accent)_26%,transparent),inset_0_1px_0_rgb(255_255_255/0.08)]"
+        >
+          <span className="absolute left-1 top-1/2 h-[20px] w-[2.5px] -translate-y-1/2 rounded-full bg-accent" />
+        </motion.span>
+      )}
+      {!selected && <span className="pointer-events-none absolute inset-0 rounded-[10px] transition-colors duration-[100ms] group-hover:bg-fill/55" />}
+      {flashAt > 0 && (
+        <motion.span
+          key={flashAt}
+          initial={{ opacity: 0.9 }}
+          animate={{ opacity: 0, transition: { duration: 0.6, ease: "easeOut" } }}
+          className="pointer-events-none absolute inset-0 rounded-[10px] bg-ok-soft"
+        />
+      )}
 
-      <Avatar src={a.has_avatar ? `/api/accounts/${a.id}/avatar` : undefined} email={a.email} size={30} className="relative" />
+      <Avatar src={a.has_avatar ? `/api/accounts/${a.id}/avatar` : undefined} email={a.email} size={28} className="relative ml-0.5" />
 
-      <div className="relative min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-base font-medium text-ink">{a.email}</span>
+      <div className="relative flex min-w-0 flex-1 flex-col justify-center pl-0.5">
+        <div className="flex min-w-0 items-center gap-1">
+          <span className={cx("truncate text-[13.5px] tracking-[-0.008em] text-ink", selected ? "font-semibold" : "font-medium")}>{a.email}</span>
+          <TierBadge tier={tier} />
           {clients.map((cl) => (
             <Tooltip key={cl.target} label={`${CLIENTS[cl.target].name} 正在用这个号`}>
-              <span className="shrink-0 rounded-[5px] bg-accent px-1 text-2xs font-semibold leading-4 text-accent-fg">{CLIENTS[cl.target].short}</span>
+              <span className="shrink-0 rounded-[5px] bg-accent px-1 text-2xs font-semibold leading-4 text-accent-fg shadow-[inset_0_0.5px_0_rgb(255_255_255/0.25)]">
+                {CLIENTS[cl.target].short}
+              </span>
             </Tooltip>
           ))}
         </div>
-        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
-          {/* 窄行：状态写在第二行 */}
-          <span className="@3xl:hidden">
-            <StatusText a={a} h={h} awaiting={awaiting} />
-          </span>
-          {a.note && <span className="truncate @3xl:max-w-none">{a.note}</span>}
-          {a.tags.length > 0 && (
-            <span className="hidden min-w-0 items-center gap-1 @xl:flex @3xl:hidden">
-              {a.tags.slice(0, 2).map((t) => (
-                <TagChip key={t} tag={t} hue={tagHue(t, colors)} active={tag === t} className="h-4 text-2xs" />
-              ))}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* 宽行：标签、状态、额度、2FA 各自固定列宽，整列严格垂直对齐 */}
-      <div className="relative hidden w-[148px] shrink-0 items-center gap-1 overflow-hidden @3xl:flex">
-        {a.tags.slice(0, 2).map((t) => (
-          <TagChip
-            key={t}
-            tag={t}
-            hue={tagHue(t, colors)}
-            active={tag === t}
-            onClick={(e) => {
-              e.stopPropagation();
-              app.set({ tag: tag === t ? "" : t });
-            }}
-          />
-        ))}
-        {a.tags.length > 2 && <span className="text-xs text-ink-3">+{a.tags.length - 2}</span>}
-      </div>
-      <div className="relative hidden w-[148px] shrink-0 @3xl:block">
-        {awaiting ? (
-          <Pill tone="accent" dot className="[&>span:first-child]:breathe">
-            等待授权…
-          </Pill>
-        ) : (
-          <Pill tone={toneOf[h]} dot={h !== "risk" && h !== "changed"} progress={h === "risk" && a.risk_days ? a.login_days / a.risk_days : undefined} title={label.hint}>
-            {label.text}
-          </Pill>
-        )}
-      </div>
-      <div className="relative hidden w-[72px] shrink-0 @2xl:block">
-        {a.service_disabled && a.appeal_at > 0 ? (
-          <span className="text-xs text-ink-3">—</span>
-        ) : a.has_token && a.quota ? (
-          <Tooltip label={`Gemini ${g === null ? "—" : pct(g) + "%"} · Claude / GPT ${c === null ? "—" : pct(c) + "%"}（取 5 小时和每周里较低的）`}>
-            <span className={cx("flex flex-col gap-[3px]", qerr && "opacity-50")}>
-              <QuotaBar fraction={g} thin label="Gemini 剩余" />
-              <QuotaBar fraction={c} thin label="Claude 剩余" className="[--bar-ok:var(--violet)]" />
-            </span>
-          </Tooltip>
-        ) : qerr && !qerr.revoked ? (
-          <Tooltip label={qerr.text}>
-            <span className="inline-flex items-center gap-1 text-xs text-danger">
-              <AlertTriangle size={12} strokeWidth={2} /> 没查到
-            </span>
-          </Tooltip>
-        ) : (
-          <span className="text-xs text-ink-3">—</span>
+        {hasSubLine && (
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
+            {layout.hasInlineStatus && <StatusText a={a} h={h} awaiting={awaiting} bill={showBill ? bill : null} />}
+            {a.note && <span className="truncate">{a.note}</span>}
+            {layout.hasInlineTags && a.tags.length > 0 && (
+              <span className="flex min-w-0 shrink-0 items-center gap-1">
+                {a.tags.slice(0, 2).map((t) => (
+                  <TagChip
+                    key={t}
+                    tag={t}
+                    hue={tagHue(t, colors)}
+                    active={tag === t}
+                    className="h-[17px] max-w-[5.5rem] text-2xs"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      app.set({ tag: tag === t ? "" : t });
+                    }}
+                  />
+                ))}
+                {a.tags.length > 2 && <span className="text-2xs text-ink-3">+{a.tags.length - 2}</span>}
+              </span>
+            )}
+          </div>
         )}
       </div>
 
-      <div className="relative flex shrink-0 items-center justify-end gap-0.5">
-        <div className="flex shrink-0 justify-end @lg:w-[96px]">{a.has_totp && <TotpButton a={a} />}</div>
+      {layout.cols.map((col) => (
+        <RowCell
+          key={col.id}
+          colId={col.id}
+          width={col.width}
+          a={a}
+          h={h}
+          label={label}
+          bill={bill}
+          showBill={showBill}
+          awaiting={awaiting}
+          syncingPerks={syncingPerks}
+          paid={paid}
+          tier={tier}
+          curMonth={curMonth}
+          qerr={qerr}
+          g={g}
+          c={c}
+          colors={colors}
+          activeTag={tag}
+        />
+      ))}
+
+      <div className="relative flex w-[28px] shrink-0 justify-end">
         <IconButton
           icon={Globe}
-          label="打开这个号的浏览器"
+          label="打开这个号的独立浏览器"
           kbd={modLabel("O")}
           onClick={(e) => {
             e.stopPropagation();
@@ -252,8 +388,308 @@ const Row = memo(function Row({ a, viewKey, animated }: { a: Account; viewKey: s
   );
 });
 
-function StatusText({ a, h, awaiting }: { a: Account; h: Health; awaiting: boolean }) {
+/* ───────── 固定列宽单元格：像素级同轴对齐 + 三级静默空值 ───────── */
+
+function QuietDash({ paid, hint }: { paid?: boolean; hint?: string }) {
+  const dash = <span className={cx("block select-none text-right text-xs", paid ? "text-ink-3/65" : "text-ink-3/30")}>—</span>;
+  return hint ? <Tooltip label={hint}>{dash}</Tooltip> : dash;
+}
+
+function PerksShimmer() {
+  return <span className="ml-auto block h-2.5 w-8 rounded-full skeleton" />;
+}
+
+function RowCell({
+  colId,
+  width,
+  a,
+  h,
+  label,
+  bill,
+  showBill,
+  awaiting,
+  syncingPerks,
+  paid,
+  tier,
+  curMonth,
+  qerr,
+  g,
+  c,
+  colors,
+  activeTag,
+}: {
+  colId: ListColId;
+  width: number;
+  a: Account;
+  h: Health;
+  label: { text: string; hint: string };
+  bill: ReturnType<typeof billingAlertOf>;
+  showBill: boolean;
+  awaiting: boolean;
+  syncingPerks: boolean;
+  paid: boolean;
+  tier: string;
+  curMonth: string;
+  qerr: ReturnType<typeof humanQuotaError> | null;
+  g: number | null;
+  c: number | null;
+  colors: Record<string, string> | undefined;
+  activeTag: string;
+}) {
+  const p = a.perks;
+  const style = { width };
+
+  switch (colId) {
+    case "tags":
+      return (
+        <div style={style} className="relative flex shrink-0 items-center gap-1 overflow-hidden">
+          {a.tags.slice(0, 2).map((t) => (
+            <TagChip
+              key={t}
+              tag={t}
+              hue={tagHue(t, colors)}
+              active={activeTag === t}
+              className="max-w-[4.7rem]"
+              onClick={(e) => {
+                e.stopPropagation();
+                app.set({ tag: activeTag === t ? "" : t });
+              }}
+            />
+          ))}
+          {a.tags.length > 2 && <span className="shrink-0 text-2xs text-ink-3">+{a.tags.length - 2}</span>}
+        </div>
+      );
+
+    case "status":
+      return (
+        <div style={style} className="relative shrink-0">
+          {awaiting ? (
+            <Pill tone="accent" dot className="[&>span:first-child]:breathe">
+              等待授权…
+            </Pill>
+          ) : showBill && bill ? (
+            <Pill tone={bill.tone} dot title={bill.hint}>
+              {bill.text}
+            </Pill>
+          ) : h === "changed" ? (
+            /* 健康常态不再用无边框漂浮胶囊，圆点与上方各行胶囊严格穿成一条垂直线 */
+            <span title={label.hint} className="inline-flex h-[22px] max-w-full items-center gap-1.5 pl-2 text-xs text-ink-3">
+              <span className="size-1.5 shrink-0 rounded-full bg-ok-dot/75" />
+              <span className="truncate">已改密</span>
+            </span>
+          ) : (
+            <Pill tone={toneOf[h]} dot={h !== "risk"} progress={h === "risk" && a.risk_days ? a.login_days / a.risk_days : undefined} title={label.hint}>
+              {label.text}
+            </Pill>
+          )}
+        </div>
+      );
+
+    case "flow": {
+      if (syncingPerks && p?.flow_credits === undefined) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <PerksShimmer />
+          </div>
+        );
+      }
+      if (p?.flow_credits !== undefined) {
+        const tip = `Flow 剩余 ${p.flow_credits.toLocaleString("en-US")} 积分${p.flow_next_grant_at ? ` · 下次到账 ${p.flow_next_grant_at}` : ""}`;
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={tip}>
+              <span className={cx("block text-right text-sm font-medium tnum", p.flow_credits > 0 ? "text-ink" : "text-ink-3")}>
+                {fmtCompactNum(p.flow_credits)}
+              </span>
+            </Tooltip>
+          </div>
+        );
+      }
+      return (
+        <div style={style} className="relative shrink-0">
+          <QuietDash paid={paid} hint={paid ? "会员号尚未同步 Flow 积分，可在右侧卡片点 ↻ 读取" : undefined} />
+        </div>
+      );
+    }
+
+    case "colab": {
+      if (syncingPerks && p?.colab_cu === undefined) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <PerksShimmer />
+          </div>
+        );
+      }
+      if (p?.colab_cu !== undefined) {
+        const gpuTip = p.colab_gpus?.length ? ` · 可用 ${p.colab_gpus.slice(0, 4).join(" / ")}` : "";
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={`Colab 剩余 ${p.colab_cu} 计算单元${gpuTip}`}>
+              <span className={cx("flex items-baseline justify-end gap-0.5 text-sm font-medium tnum", p.colab_cu > 0 ? "text-ink" : "text-ink-3")}>
+                <span>{fmtCompactNum(p.colab_cu)}</span>
+                <span className="text-2xs font-normal text-ink-3">CU</span>
+              </span>
+            </Tooltip>
+          </div>
+        );
+      }
+      return (
+        <div style={style} className="relative shrink-0">
+          <QuietDash paid={paid} hint={paid ? "会员号尚未同步 Colab 算力" : undefined} />
+        </div>
+      );
+    }
+
+    case "api": {
+      if (syncingPerks && p?.api_credit_balance === undefined && !p?.api_credit_claimed_month) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <PerksShimmer />
+          </div>
+        );
+      }
+      const claimedNow = p?.api_credit_claimed_month === curMonth;
+      if (claimedNow && p?.api_credit_balance !== undefined) {
+        const amt = p.api_credit_balance >= 100 ? `$${Math.round(p.api_credit_balance)}` : `$${p.api_credit_balance.toFixed(1).replace(/\.0$/, "")}`;
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={`本月 API 赠金已激活 · 剩余 $${p.api_credit_balance.toFixed(2)}${p.api_credit_total ? ` / $${p.api_credit_total}` : ""}`}>
+              <span className={cx("block text-right text-sm font-medium tnum", p.api_credit_balance > 0 ? "text-ok" : "text-ink-3")}>{amt}</span>
+            </Tooltip>
+          </div>
+        );
+      }
+      if (claimedNow) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={`已记录 ${curMonth} 开发者赠金已领取`}>
+              <span className="block text-right text-xs font-medium text-ok">已领</span>
+            </Tooltip>
+          </div>
+        );
+      }
+      if (paid) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={`本月 ${p?.api_credit_total ? `$${p.api_credit_total}/月` : apiCreditAmountLabel(tier)} 赠金待激活或确认`}>
+              <span className="block text-right text-xs font-medium text-warn">待领</span>
+            </Tooltip>
+          </div>
+        );
+      }
+      return (
+        <div style={style} className="relative shrink-0">
+          <QuietDash />
+        </div>
+      );
+    }
+
+    case "renewal": {
+      if (syncingPerks && !p?.renewal_date) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <PerksShimmer />
+          </div>
+        );
+      }
+      if (p?.renewal_date) {
+        const auto = p.billing_state === "auto_renew";
+        const suffix = auto ? "续" : p.billing_state === "cancelled" ? "止" : "";
+        const toneCls =
+          bill?.urgent && bill.tone === "danger"
+            ? "font-semibold text-danger"
+            : bill
+              ? "font-medium text-warn"
+              : "text-ink-2";
+        const tip = `${p.renewal_date} ${auto ? "自动扣费" : "到期"}${bill ? `（${bill.text}）` : ""}`;
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={tip}>
+              <span className={cx("flex items-baseline justify-end gap-0.5 font-mono text-xs tnum", toneCls)}>
+                <span>{p.renewal_date.slice(5)}</span>
+                {suffix && <span className={cx("font-sans text-2xs", bill?.urgent ? "opacity-90" : "text-ink-3")}>{suffix}</span>}
+              </span>
+            </Tooltip>
+          </div>
+        );
+      }
+      if (p?.billing_state === "expired") {
+        return (
+          <div style={style} className="relative shrink-0 text-right text-xs text-ink-3">
+            已到期
+          </div>
+        );
+      }
+      return (
+        <div style={style} className="relative shrink-0">
+          <QuietDash paid={paid} hint={paid ? "尚未记录订阅到期或扣费日" : undefined} />
+        </div>
+      );
+    }
+
+    case "quota": {
+      if (a.service_disabled && a.appeal_at > 0) {
+        return (
+          <div style={style} className="relative shrink-0">
+            <QuietDash />
+          </div>
+        );
+      }
+      if (a.has_token && a.quota) {
+        const gp = g === null ? null : pct(g);
+        const cp = c === null ? null : pct(c);
+        const minP = gp !== null && cp !== null ? Math.min(gp, cp) : gp ?? cp;
+        return (
+          <div style={style} className="relative shrink-0">
+            <Tooltip label={`Gemini ${gp === null ? "—" : gp + "%"} · Claude / GPT ${cp === null ? "—" : cp + "%"}（右侧显示较低池百分比）`}>
+              <span className={cx("flex items-center justify-end gap-1", qerr && "opacity-50")}>
+                <span className="flex w-[32px] shrink-0 flex-col gap-[3px]">
+                  <QuotaBar fraction={g} thin label="Gemini 剩余" />
+                  <QuotaBar fraction={c} thin label="Claude 剩余" className="[--bar-ok:var(--violet)]" />
+                </span>
+                <span
+                  className={cx(
+                    "w-[28px] shrink-0 text-right text-xs font-medium tnum",
+                    minP === null ? "text-ink-3" : minP <= 0 ? "text-danger" : minP < 20 ? "text-warn" : "text-ink-2",
+                  )}
+                >
+                  {minP === null ? "—" : `${minP}%`}
+                </span>
+              </span>
+            </Tooltip>
+          </div>
+        );
+      }
+      if (qerr && !qerr.revoked) {
+        return (
+          <div style={style} className="relative flex shrink-0 justify-end">
+            <Tooltip label={qerr.text}>
+              <span className="inline-flex items-center gap-1 text-xs text-danger">
+                <AlertTriangle size={11} strokeWidth={2.1} /> 异常
+              </span>
+            </Tooltip>
+          </div>
+        );
+      }
+      return (
+        <div style={style} className="relative shrink-0">
+          <QuietDash />
+        </div>
+      );
+    }
+
+    case "totp":
+      return (
+        <div style={style} className="relative flex shrink-0 justify-end">
+          {a.has_totp && <TotpButton a={a} />}
+        </div>
+      );
+  }
+}
+
+function StatusText({ a, h, awaiting, bill }: { a: Account; h: Health; awaiting: boolean; bill: ReturnType<typeof billingAlertOf> }) {
   if (awaiting) return <span className="text-accent">等待授权…</span>;
+  if (bill) return <span className={cx("whitespace-nowrap", bill.tone === "danger" ? "text-danger" : "text-warn")}>{bill.text}</span>;
   const l = healthLabel(a);
   const cls = h === "pending" || h === "due" ? "text-warn" : h === "revoked" || h === "disabled" ? "text-danger" : "";
   return <span className={cx("whitespace-nowrap", cls)}>{l.text}</span>;
@@ -285,7 +721,7 @@ function TotpButton({ a }: { a: Account }) {
           if (await copyTotp(a)) flash();
         }}
         className={cx(
-          "flex h-7 items-center gap-1.5 rounded-[8px] px-2 text-sm font-medium transition-colors duration-[120ms]",
+          "flex h-7 items-center gap-1 rounded-[8px] px-1 text-sm font-medium transition-colors duration-[120ms]",
           done ? "bg-ok-soft text-ok" : "text-ink-2 hover:bg-fill hover:text-ink",
         )}
       >
@@ -314,8 +750,16 @@ function Empty({ icon: Icon, title, desc, children }: { icon: typeof Sparkles; t
 }
 
 function EmptyFiltered({ filter }: { filter: string }) {
-  const hasQuery = useStore(app, (s) => !!s.query || !!s.tag);
-  const reset = () => app.set({ filter: "all", tag: "", query: "" });
+  const scope = useStore(app, (s) => s.scope);
+  const hasQuery = useStore(app, (s) => !!s.query || !!s.tag || s.scope !== "all");
+  const reset = () => app.set({ filter: "all", scope: "all", tag: "", query: "" });
+  if (scope === "billing" && !app.get().query && !app.get().tag) {
+    return (
+      <Empty icon={Sparkles} title="没有急着退订的号" desc="5 天内自动扣费的号会出现在这里">
+        <Button onClick={reset}>查看全部账号</Button>
+      </Empty>
+    );
+  }
   if (!hasQuery && filter === "disabled") return <Empty icon={Sparkles} title="没有服务停用的号" desc="Antigravity 对话服务受限的号会出现在这里" />;
   if (!hasQuery && filter === "password") return <Empty icon={Sparkles} title="手头改密的事都清了" desc="风控期满的号会自动出现在这里" />;
   if (!hasQuery && filter === "auth") return <Empty icon={Sparkles} title="授权都正常" desc="授权过期的号会自动出现在这里" />;

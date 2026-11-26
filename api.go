@@ -26,7 +26,9 @@ type App struct {
 	pending map[string]pendingAuth // OAuth state → 正在授权的账号
 	vault   vaultState             // 查看密码的解锁状态，受 mu 保护
 
-	browserLocks   sync.Map   // 邮箱 → *sync.Mutex：同一账号的浏览器资料同时只做一件事（写密码库 / 启动）
+	browserLocks   sync.Map   // 规范化资料目录路径 → *sync.Mutex：同一浏览器资料目录同时只做一件事（写密码库 / 启动）
+	patrolJobs     sync.Map   // 规范化资料目录路径 → *patrolHandle：正在后台无头刷新权益的任务（用户点打开浏览器时立即抢占让路）
+	passiveWatches sync.Map   // 规范化资料目录路径 → bool：已挂载的日常浏览顺手同步协程
 	switchMu       sync.Mutex // 同一时间只做一次切号（会关闭 / 重启客户端、改凭据管理器）
 	serviceCheckMu sync.Mutex // 同一时间只运行一个对话探针
 }
@@ -54,9 +56,10 @@ type AccountView struct {
 	HasToken    bool       `json:"has_token"`
 	HasAvatar   bool       `json:"has_avatar"`
 	HasPassword bool       `json:"has_password"`
-	HasTotp     bool       `json:"has_totp"`
-	HasPending  bool       `json:"has_pending_password"` // 有生成了但还没确认的新密码
-	Quota       *QuotaInfo `json:"quota"`
+	HasTotp     bool          `json:"has_totp"`
+	HasPending  bool          `json:"has_pending_password"` // 有生成了但还没确认的新密码
+	Quota       *QuotaInfo    `json:"quota"`
+	Perks       *AccountPerks `json:"perks"`
 }
 
 func daysBetween(from, to string) int {
@@ -86,6 +89,12 @@ func (a *App) view(acc Account, now string) AccountView {
 		var q QuotaInfo
 		if json.Unmarshal([]byte(acc.QuotaJSON), &q) == nil {
 			v.Quota = &q
+		}
+	}
+	if acc.PerksJSON != "" {
+		var p AccountPerks
+		if json.Unmarshal([]byte(acc.PerksJSON), &p) == nil && !p.isEmpty() {
+			v.Perks = &p
 		}
 	}
 	v.Status, v.RiskLeft = accountStatus(acc, now)
@@ -134,6 +143,9 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("PUT /api/accounts/{id}", a.updateAccount)
 	mux.HandleFunc("DELETE /api/accounts/{id}", a.deleteAccount)
 	mux.HandleFunc("PUT /api/accounts/{id}/tags", a.updateTags)
+	mux.HandleFunc("PATCH /api/accounts/{id}/perks", a.patchAccountPerks)
+	mux.HandleFunc("POST /api/accounts/{id}/perks/refresh", a.refreshOneAccountPerks)
+	mux.HandleFunc("POST /api/perks/refresh", a.refreshAllPerks)
 	mux.HandleFunc("POST /api/accounts/{id}/open", a.openAccount)
 	mux.HandleFunc("POST /api/accounts/{id}/authorize", a.authorize)
 	mux.HandleFunc("POST /api/accounts/{id}/password-changed", a.passwordChanged)
@@ -145,6 +157,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/chrome-profiles/import", a.importChromeProfiles)
 	mux.HandleFunc("GET /api/chrome-profiles/{dir}/avatar", a.chromeProfileAvatar)
 	mux.HandleFunc("POST /api/accounts/detach-chrome", a.detachChromeProfiles)
+	mux.HandleFunc("POST /api/accounts/{id}/detach-chrome", a.detachAccountChrome)
 	mux.HandleFunc("POST /api/accounts/{id}/reveal-password", a.revealPassword)
 	mux.HandleFunc("POST /api/accounts/{id}/password-change/start", a.startPasswordChange)
 	mux.HandleFunc("POST /api/accounts/{id}/password-change/confirm", a.confirmPasswordChange)
@@ -340,8 +353,9 @@ func (a *App) updateTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.view(saved, today()))
 }
 
-func (a *App) lockBrowser(email string) func() {
-	m, _ := a.browserLocks.LoadOrStore(email, &sync.Mutex{})
+func (a *App) lockBrowser(acc Account) func() {
+	key := filepath.Clean(a.profilePath(acc))
+	m, _ := a.browserLocks.LoadOrStore(key, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
@@ -371,7 +385,7 @@ func (a *App) syncPasswordLater(id int64) {
 		if err != nil {
 			return
 		}
-		defer a.lockBrowser(acc.Email)()
+		defer a.lockBrowser(acc)()
 		if err := a.syncBrowserPassword(acc, chrome, st); err != nil {
 			log.Printf("把 %s 的密码存进浏览器失败：%v", acc.Email, err)
 		}
@@ -380,6 +394,17 @@ func (a *App) syncPasswordLater(id int64) {
 
 // launchFor 在账号自己的 Chrome 资料目录里打开 url。返回的 warning 非空表示密码没能写进浏览器，但浏览器已打开。
 func (a *App) launchFor(acc Account, url string) (warning string, err error) {
+	// 若该资料目录正在后台跑无头权益刷新，先取消并等它释放锁，避免新打开的窗口连进无头实例变「幽灵窗口」。
+	a.preemptPatrol(acc)
+
+	// 若该账号是自带独立浏览器且已经开着可见窗口（CDP 连通），直接通过 CDP 秒开并激活新标签页，
+	// 既更快，也避免重复起进程和触发 Windows「浏览器正开着写不了密码库」的误报。
+	if acc.ChromeProfile == "" {
+		if a.openTabViaActiveCDP(acc, url) {
+			return "", nil
+		}
+	}
+
 	st, err := a.store.GetSettings()
 	if err != nil {
 		return "", err
@@ -388,13 +413,16 @@ func (a *App) launchFor(acc Account, url string) (warning string, err error) {
 	if err != nil {
 		return "", err
 	}
-	defer a.lockBrowser(acc.Email)()
+	defer a.lockBrowser(acc)()
 	if err := a.syncBrowserPassword(acc, chrome, st); err != nil {
 		log.Printf("把 %s 的密码存进浏览器失败：%v", acc.Email, err)
 		warning = "密码没能存进浏览器：" + err.Error()
 	}
 	if err := launchChrome(chrome, a.profilePath(acc), acc.ChromeProfile, proxyFor(acc, st), url); err != nil {
 		return "", errors.New("启动 Chrome 失败：" + err.Error())
+	}
+	if acc.ChromeProfile == "" {
+		a.startPassiveWatcher(acc.ID, filepath.Clean(a.profilePath(acc)))
 	}
 	return warning, nil
 }
@@ -410,7 +438,7 @@ func (a *App) openAccount(w http.ResponseWriter, r *http.Request) {
 		target, ok = allowGoogleURL(q.Get("url"))
 	}
 	if !ok {
-		writeErr(w, errors.New("target 只能是 browser / mail / password 或 Google 官方 https 链接"))
+		writeErr(w, errors.New("不支持的打开目标或非 Google 官方 https 链接"))
 		return
 	}
 	id, err := pathID(r)

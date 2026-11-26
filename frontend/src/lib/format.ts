@@ -42,6 +42,26 @@ export function todayStr(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+export function currentMonthStr(now = Date.now()): string {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** 按本机日历零点解析 YYYY-MM-DD，返回距今天的天数（0=今天，<0=已过），消除 UTC 时区跨天偏差。 */
+export function calendarDaysUntil(ymd: string | undefined, now = Date.now()): number | null {
+  if (!ymd) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  const target = new Date(y, mo, day);
+  if (target.getFullYear() !== y || target.getMonth() !== mo || target.getDate() !== day) return null;
+  const cur = new Date(now);
+  const todayZero = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
+  return Math.round((target.getTime() - todayZero.getTime()) / 86_400_000);
+}
+
 /* ───────── 额度 ───────── */
 
 export type Pool = "gemini" | "claude";
@@ -79,9 +99,45 @@ export function level(p: number): Level {
   return p <= 0 ? "zero" : p < 20 ? "low" : "ok";
 }
 
+export function effectiveTier(a: Account): string {
+  return (a.perks?.tier_override || a.perks?.web_tier || a.quota?.tier || "").toUpperCase();
+}
+
+export function isPaidTier(tier: string): boolean {
+  const t = (tier || "").toUpperCase();
+  return t === "PRO" || t === "ULTRA" || t === "ULTRA_5X" || t === "ULTRA_20X";
+}
+
+export function isUltraTier(tier: string): boolean {
+  return (tier || "").toUpperCase().startsWith("ULTRA");
+}
+
 export function tierLabel(tier: string): string {
   const t = (tier || "").toUpperCase();
-  return t === "FREE" ? "Free" : t === "PRO" ? "Pro" : t === "ULTRA" ? "Ultra" : t === "ENTERPRISE" ? "Enterprise" : tier;
+  if (t === "FREE") return "Free";
+  if (t === "PRO") return "Pro";
+  if (t === "ULTRA") return "Ultra";
+  if (t === "ULTRA_5X") return "Ultra 5x";
+  if (t === "ULTRA_20X") return "Ultra 20x";
+  if (t === "ENTERPRISE") return "Enterprise";
+  return tier;
+}
+
+export function apiCreditAmountLabel(tier: string): string {
+  const t = (tier || "").toUpperCase();
+  if (t === "PRO") return "$10/月";
+  if (t === "ULTRA_5X") return "$40/月";
+  if (t === "ULTRA_20X") return "$100/月";
+  if (t === "ULTRA") return "$40–$100/月";
+  return "月度赠金";
+}
+
+/** 适配紧凑数字指标列：99,999 以内精确展示千分位（不吞掉 +50 日签等零头），十万级起缩写为 105k。 */
+export function fmtCompactNum(n: number): string {
+  if (Math.abs(n) >= 100_000) {
+    return `${(n / 1000).toFixed(0)}k`;
+  }
+  return Number.isInteger(n) ? n.toLocaleString("en-US") : n.toFixed(1).replace(/\.0$/, "");
 }
 
 /** 把后端存下的原始报错翻译成人话，并提取需要去 Google 验证的链接。 */
