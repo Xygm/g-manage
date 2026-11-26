@@ -299,6 +299,9 @@ function cleanQuotaError(raw) {
 
 function quotaCell(a) {
   const notice = serviceNotice(a);
+  if (a.service_disabled && a.appeal_at > 0) {
+    return h("div.quota", {}, notice);
+  }
   if (!a.has_token) {
     return h("div.quota", {}, notice, h("span.quota-unauth", { title: "点击右侧「授权」后即可查询反重力额度" }, "— 未授权"));
   }
@@ -565,7 +568,7 @@ function row(a) {
       h("div.days", {}, String(a.login_days), h("small", {}, "天")),
       h("p.meta.mono", {}, a.login_date)),
     h("td", { "data-label": "风控 / 改密" }, statusCell(a)),
-    h("td", { "data-label": "反重力额度" }, quotaCell(a)),
+    h("td", { "data-label": a.service_disabled ? "服务状态" : "反重力额度" }, quotaCell(a)),
     h("td", { "data-label": "" }, actions),
   );
 }

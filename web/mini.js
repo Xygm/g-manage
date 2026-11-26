@@ -282,6 +282,7 @@ function quotaList(c, acc) {
   if (!acc) {
     return h("p.mini-hint", {}, c.email ? "这个号不在列表里，看不到额度" : "还没有登录");
   }
+  if (acc.service_disabled && acc.appeal_at > 0) return null;
   const rows = [];
   for (const g of (acc.quota && acc.quota.groups) || []) {
     for (const b of g.buckets || []) rows.push(quotaRow(g.display_name, b));
