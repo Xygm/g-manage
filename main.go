@@ -67,6 +67,7 @@ func main() {
 			fatal("内部服务异常退出：" + err.Error())
 		}
 	}()
+	go app.monitorServiceLogs()
 	log.Printf("已启动，数据目录：%s", dir)
 
 	runUI("http://"+*listenAddr+"/", dir, func() UIPrefs {
