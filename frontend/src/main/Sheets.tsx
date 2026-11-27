@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from "motion/react";
 import { Check, ChevronDown, Copy, Fingerprint } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type Dispatch, type DragEvent, type SetStateAction } from "react";
 import { ApiError, api } from "../lib/api";
 import { app, canSwitch, CLIENTS, copyPlain, reloadAccounts, saveAccount, saveSettings } from "../lib/app";
+import { decodeQrImage, imageFileFromTransfer, secretFromQrText, transferHasFiles } from "../lib/qr";
 import { modLabel } from "../lib/bridge";
 import { todayStr } from "../lib/format";
 import { useStore } from "../lib/store";
@@ -61,6 +62,107 @@ function parseSmartLine(raw: string): Partial<Pick<AccountInput, "email" | "pass
   return { email, password: password || undefined, totp_secret: totp || undefined, note: notes.length ? notes.join(" · ") : undefined };
 }
 
+const noQr = "没认出二维码，换一张更清晰的图";
+
+/** 把识别出的密钥写进表单。邮箱已经有了就不覆盖。 */
+function placeQrSecret(prev: AccountInput, qr: { secret: string; email?: string }): { next: AccountInput; notice: string } {
+  const email = !prev.email.trim() && qr.email ? qr.email : "";
+  return {
+    next: { ...prev, totp_secret: qr.secret, clear_totp: false, email: email || prev.email },
+    notice: email ? `已填入 2FA 密钥，并识别邮箱 ${email}` : "已从二维码填入 2FA 密钥",
+  };
+}
+
+function totpHint(hasTotp: boolean | undefined, clearing: boolean | undefined, qr: { busy: boolean; over: boolean }): string {
+  if (qr.busy) return "正在识别二维码…";
+  if (qr.over) return "松开即可填入密钥";
+  if (hasTotp) return clearing ? "保存后会清除已存的密钥" : "已存，留空就不改。拖入或粘贴新二维码会替换";
+  return `密钥或 otpauth:// 链接。可拖入二维码，或 ${modLabel("V")}`;
+}
+
+function qrDropHandlers(onFile: (file: File | null) => void, setOver: (over: boolean) => void) {
+  const carryingFile = (data: DataTransfer | null) => transferHasFiles(data);
+  return {
+    onPaste(ev: ClipboardEvent<HTMLFormElement>) {
+      const file = imageFileFromTransfer(ev.clipboardData);
+      if (!file) return;
+      ev.preventDefault();
+      onFile(file);
+    },
+    onDragEnter(ev: DragEvent<HTMLFormElement>) {
+      if (!carryingFile(ev.dataTransfer)) return;
+      ev.preventDefault();
+      setOver(true);
+    },
+    onDragOver(ev: DragEvent<HTMLFormElement>) {
+      if (!carryingFile(ev.dataTransfer)) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave(ev: DragEvent<HTMLFormElement>) {
+      if (ev.relatedTarget instanceof Node && ev.currentTarget.contains(ev.relatedTarget)) return;
+      setOver(false);
+    },
+    onDrop(ev: DragEvent<HTMLFormElement>) {
+      if (!carryingFile(ev.dataTransfer)) return;
+      ev.preventDefault();
+      setOver(false);
+      onFile(imageFileFromTransfer(ev.dataTransfer));
+    },
+  };
+}
+
+/** 表单上的拖入和粘贴：图片解码后填进 2FA，文字粘贴照旧交给输入框。 */
+function useQrSecret(setF: Dispatch<SetStateAction<AccountInput>>, setErr: Dispatch<SetStateAction<{ field: string; msg: string } | null>>) {
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const reset = () => {
+    setOver(false);
+    setBusy(false);
+  };
+
+  const read = async (file: File) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const text = await decodeQrImage(file);
+      if (!text) {
+        setErr({ field: "totp_secret", msg: noQr });
+        return;
+      }
+      const parsed = secretFromQrText(text);
+      if (!parsed.ok) {
+        setErr({ field: "totp_secret", msg: parsed.error });
+        return;
+      }
+      // 解码完成后再读表单：这段时间用户可能已经填了邮箱，不能盖掉。
+      let notice = "";
+      setF((prev) => {
+        const placed = placeQrSecret(prev, parsed);
+        notice = placed.notice;
+        return placed.next;
+      });
+      toast.ok(notice);
+    } catch {
+      setErr({ field: "totp_secret", msg: noQr });
+    } finally {
+      setBusy(false);
+      setOver(false);
+    }
+  };
+
+  const take = (file: File | null) => {
+    if (!file) {
+      setErr({ field: "totp_secret", msg: "请拖入二维码图片" });
+      return;
+    }
+    void read(file);
+  };
+
+  return { over, busy, reset, handlers: qrDropHandlers(take, setOver) };
+}
+
 /* ───────── 添加 / 编辑账号 ───────── */
 
 export function AccountSheet() {
@@ -75,10 +177,12 @@ export function AccountSheet() {
   const [more, setMore] = useState(false);
   const [err, setErr] = useState<{ field: string; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const qr = useQrSecret(setF, setErr);
 
   useEffect(() => {
     if (!open) return;
     setErr(null);
+    qr.reset();
     if (editing) {
       const init: AccountInput = {
         email: editing.email, note: editing.note, login_date: editing.login_date, risk_days: editing.risk_days, pwd_changed_date: editing.pwd_changed_date,
@@ -176,6 +280,7 @@ export function AccountSheet() {
           }
         }}
         className="flex flex-col gap-3.5"
+        {...qr.handlers}
       >
         <Field label="邮箱" error={e("email")} hint={!editId ? "支持直接粘贴「邮箱----密码----2FA」整行自动分拣" : undefined}>
           {(id) => (
@@ -232,14 +337,14 @@ export function AccountSheet() {
               </div>
             )}
           </Field>
-          <Field label="2FA 密钥" error={e("totp_secret")} hint={editing?.has_totp ? (f.clear_totp ? "保存后会清除已存的密钥" : "已存，留空就不改") : "验证器密钥或 otpauth:// 链接"}>
+          <Field label="2FA 密钥" error={e("totp_secret")} hint={totpHint(editing?.has_totp, f.clear_totp, qr)}>
             {(id) => (
-              <div className="relative">
+              <div className={cx("relative rounded-[10px]", qr.over && "shadow-[0_0_0_1px_var(--accent),0_0_0_4px_var(--accent-soft)]")}>
                 <TextInput
                   id={id}
                   mono
                   value={f.totp_secret}
-                  disabled={f.clear_totp}
+                  disabled={f.clear_totp || qr.busy}
                   onChange={(x) => {
                     const v = x.target.value;
                     set("totp_secret", v);
@@ -248,8 +353,9 @@ export function AccountSheet() {
                       if (p?.email) set("email", p.email);
                     }
                   }}
-                  placeholder={editing?.has_totp ? "已存" : "JBSW Y3DP EHPK 3PXP"}
+                  placeholder={qr.busy ? "正在识别…" : editing?.has_totp ? "已存" : "JBSW Y3DP EHPK 3PXP"}
                   aria-invalid={!!e("totp_secret")}
+                  aria-busy={qr.busy}
                   className={editing?.has_totp ? "pr-16" : ""}
                 />
                 {editing?.has_totp && (
