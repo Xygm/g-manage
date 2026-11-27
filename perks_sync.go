@@ -41,32 +41,6 @@ func (a *App) preemptPatrol(acc Account) {
 	}
 }
 
-// openTabViaActiveCDP 在已开启 CDP 的独立浏览器中直接新建并聚焦标签页。
-func (a *App) openTabViaActiveCDP(acc Account, targetURL string) bool {
-	dir := filepath.Clean(a.profilePath(acc))
-	// 若此刻正在跑无头巡检，绝不能往无头实例里开标签页。
-	if _, busy := a.patrolJobs.Load(dir); busy {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-	cli, err := dialCDPFromDir(ctx, dir)
-	if err != nil {
-		return false
-	}
-	defer cli.Close()
-
-	var created struct {
-		TargetID string `json:"targetId"`
-	}
-	if err := cli.call(ctx, "", "Target.createTarget", map[string]any{"url": targetURL}, &created); err != nil || created.TargetID == "" {
-		return false
-	}
-	_ = cli.call(ctx, "", "Target.activateTarget", map[string]any{"targetId": created.TargetID}, nil)
-	a.startPassiveWatcher(acc.ID, dir)
-	return true
-}
-
 /* ───────── 解析器（全部基于真实 Google 线上包体与页面文本结构） ───────── */
 
 var (
@@ -768,8 +742,8 @@ func collectAllPerksOnSession(ctx context.Context, cli *cdpClient, sessionID str
 	}, nil
 }
 
-// syncAccountPerks 执行单个账号的自动权益同步：
-// 已开带 CDP 的独立浏览器时后台开临时标签页抓完即关该标签；没开时拉起无头实例抓完优雅落盘退出。
+// syncAccountPerks 执行单个账号的自动权益同步：浏览器关着时拉起无头实例抓完优雅落盘退出。
+// 手动打开的浏览器不挂调试通道（Google 登录页会因此拒绝登录），所以开着窗口时不同步。
 func (a *App) syncAccountPerks(parentCtx context.Context, acc Account, st Settings) (Account, error) {
 	if acc.ChromeProfile != "" {
 		return acc, errors.New("该账号仍关联日常 Chrome 资料，请先在下方资料卡点「改为自带」后再自动同步")
@@ -779,46 +753,11 @@ func (a *App) syncAccountPerks(parentCtx context.Context, acc Account, st Settin
 		return acc, err
 	}
 	dir := filepath.Clean(a.profilePath(acc))
-
-	// 情况 1：用户已经开着该号的独立浏览器（优先复用，不关窗口）
 	if chromeRunning(dir) {
-		dialCtx, dialCancel := context.WithTimeout(parentCtx, 2*time.Second)
-		liveCli, liveErr := dialCDPFromDir(dialCtx, dir)
-		dialCancel()
-		if liveErr != nil {
-			return acc, errors.New("这个号的浏览器正开着（旧窗口未挂调试通道），请先关掉该浏览器窗口再点同步")
-		}
-		defer liveCli.Close()
-
-		ctx, cancel := context.WithTimeout(parentCtx, 50*time.Second)
-		defer cancel()
-
-		var created struct {
-			TargetID string `json:"targetId"`
-		}
-		if err := liveCli.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, &created); err != nil || created.TargetID == "" {
-			return acc, fmt.Errorf("创建后台同步标签页失败：%w", err)
-		}
-		defer func() {
-			cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = liveCli.call(cctx, "", "Target.closeTarget", map[string]any{"targetId": created.TargetID}, nil)
-			ccancel()
-		}()
-
-		var attached struct {
-			SessionID string `json:"sessionId"`
-		}
-		if err := liveCli.call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached); err != nil {
-			return acc, fmt.Errorf("附着后台同步标签页失败：%w", err)
-		}
-		mergeFn, err := collectAllPerksOnSession(ctx, liveCli, attached.SessionID, acc)
-		if err != nil {
-			return acc, err
-		}
-		return a.store.UpdatePerks(acc.ID, mergeFn)
+		return acc, errors.New("这个号的浏览器正开着，请先关掉该浏览器窗口再同步")
 	}
 
-	// 情况 2：浏览器未开，启动受控无头实例，支持被用户点击「打开浏览器」随时抢占让路。
+	// 浏览器未开，启动受控无头实例，支持被用户点击「打开浏览器」随时抢占让路。
 	ctx, cancel := context.WithTimeout(parentCtx, 55*time.Second)
 	handle := &patrolHandle{cancel: cancel, done: make(chan struct{})}
 	if _, loaded := a.patrolJobs.LoadOrStore(dir, handle); loaded {
@@ -946,213 +885,6 @@ func (a *App) syncAccountPerks(parentCtx context.Context, acc Account, st Settin
 		return acc, err
 	}
 	return a.store.UpdatePerks(acc.ID, mergeFn)
-}
-
-/* ───────── 模式 A：用户平时浏览时顺手无感同步 ───────── */
-
-func classifyPerksSite(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" {
-		return ""
-	}
-	h := strings.ToLower(u.Hostname())
-	p := strings.ToLower(u.Path)
-	switch {
-	case h == "flow.google.com" || (h == "labs.google" && strings.HasPrefix(p, "/fx")):
-		return "flow"
-	case h == "colab.research.google.com":
-		return "colab"
-	case h == "me.developers.google.com" && strings.HasPrefix(p, "/benefits"):
-		return "benefits"
-	case h == "myaccount.google.com" && strings.HasPrefix(p, "/subscriptions"):
-		return "subscriptions"
-	case h == "myaccount.google.com" && strings.HasPrefix(p, "/family"):
-		return "family"
-	case h == "one.google.com":
-		return "one"
-	}
-	return ""
-}
-
-func (a *App) startPassiveWatcher(accountID int64, dir string) {
-	if _, loaded := a.passiveWatches.LoadOrStore(dir, true); loaded {
-		return
-	}
-	go func() {
-		defer a.passiveWatches.Delete(dir)
-
-		var cli *cdpClient
-		for range 30 {
-			ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
-			c, err := dialCDPFromDir(ctx, dir)
-			cancel()
-			if err == nil {
-				cli = c
-				break
-			}
-			time.Sleep(300 * time.Millisecond)
-		}
-		if cli == nil {
-			return
-		}
-		defer cli.Close()
-
-		var (
-			mu   sync.Mutex
-			last = map[string]time.Time{}
-		)
-		cli.subscribe(func(ev cdpEvent) {
-			if ev.Method != "Target.targetInfoChanged" {
-				return
-			}
-			var p struct {
-				TargetInfo struct {
-					TargetID string `json:"targetId"`
-					Type     string `json:"type"`
-					URL      string `json:"url"`
-				} `json:"targetInfo"`
-			}
-			if json.Unmarshal(ev.Params, &p) != nil || p.TargetInfo.Type != "page" {
-				return
-			}
-			site := classifyPerksSite(p.TargetInfo.URL)
-			if site == "" {
-				return
-			}
-			key := p.TargetInfo.TargetID + "|" + site
-			mu.Lock()
-			if time.Since(last[key]) < 8*time.Second {
-				mu.Unlock()
-				return
-			}
-			last[key] = time.Now()
-			mu.Unlock()
-
-			go a.passiveInspectTarget(cli, accountID, p.TargetInfo.TargetID, site)
-		})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = cli.call(ctx, "", "Target.setDiscoverTargets", map[string]any{"discover": true}, nil)
-		cancel()
-
-		<-cli.Done()
-	}()
-}
-
-func (a *App) passiveInspectTarget(cli *cdpClient, accountID int64, targetID, site string) {
-	// 等用户打开的页面完成首屏异步渲染再静默读取
-	time.Sleep(3500 * time.Millisecond)
-
-	acc, err := a.store.GetAccount(accountID)
-	if err != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var attached struct {
-		SessionID string `json:"sessionId"`
-	}
-	if cli.call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached) != nil || attached.SessionID == "" {
-		return
-	}
-	defer func() {
-		dctx, dcancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-		_ = cli.call(dctx, "", "Target.detachFromTarget", map[string]any{"sessionId": attached.SessionID}, nil)
-		dcancel()
-	}()
-
-	snap, err := inspectDOM(ctx, cli, attached.SessionID)
-	if err != nil || isSignInURL(snap.URL) || verifyPageAccount(acc.Email, snap.Email) {
-		return
-	}
-	now := time.Now()
-
-	switch site {
-	case "flow":
-		if c, next, ok := fetchFlowViaSameOriginRPC(ctx, cli, attached.SessionID); ok {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				p.FlowCredits = &c
-				if next != "" {
-					p.FlowNextGrantAt = next
-				}
-				p.WebTier = observeWebTier(p.WebTier, snap.Tier)
-				p.WebStatus = "ok"
-				p.WebError = ""
-				return true, nil
-			})
-		}
-	case "colab":
-		if cu, gpus, ok := fetchColabViaSameOrigin(ctx, cli, attached.SessionID); ok {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				p.ColabCU = &cu
-				p.ColabGPUs = gpus
-				if cu > 0 && p.ColabObservedAt == "" {
-					p.ColabObservedAt = now.Format(dateLayout)
-				}
-				p.WebStatus = "ok"
-				p.WebError = ""
-				return true, nil
-			})
-		}
-	case "benefits":
-		tot, bal, month, tier := parseDeveloperBenefitsText(snap.Text, now)
-		if tot > 0 || bal != nil || month != "" {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				if tot > 0 {
-					p.APICreditTotal = tot
-				}
-				if bal != nil {
-					p.APICreditBalance = bal
-				}
-				if month != "" {
-					p.APICreditClaimedMonth = month
-				}
-				p.WebTier = observeWebTier(p.WebTier, tier)
-				p.WebStatus = "ok"
-				p.WebError = ""
-				return true, nil
-			})
-		}
-	case "subscriptions":
-		if st, ymd, ok := parseSubscriptionsText(snap.Text); ok {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				if !p.BillingManual || p.BillingState == "" {
-					p.BillingState = st
-				}
-				if !p.BillingManual || p.RenewalDate == "" {
-					p.RenewalDate = ymd
-				}
-				p.WebStatus = "ok"
-				p.WebError = ""
-				return true, nil
-			})
-		}
-	case "family":
-		role, mem, pend, tier := parseFamilyDetailsText(snap.Text)
-		if role != "" {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				p.FamilyRole = role
-				p.FamilyMembers = mem
-				p.FamilyPending = pend
-				p.WebTier = observeWebTier(p.WebTier, tier)
-				p.WebStatus = "ok"
-				p.WebError = ""
-				return true, nil
-			})
-		}
-	case "one":
-		t, src := parseOnePlansText(snap.Text, "")
-		if t != "" || src != "" {
-			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				p.WebTier = observeWebTier(p.WebTier, t)
-				if src != "" {
-					p.BillingSource = src
-				}
-				return true, nil
-			})
-		}
-	}
 }
 
 /* ───────── HTTP 接口 ───────── */

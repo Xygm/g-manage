@@ -1130,7 +1130,7 @@ function PerksCard({ a }: { a: Account }) {
                 icon={RefreshCw}
                 size="xs"
                 busy={syncing}
-                label="从该号独立浏览器自动同步 Flow 积分、Colab CU 与订阅账期"
+                label="后台同步 Flow 积分、Colab CU 与订阅账期（要先关掉这个号的浏览器）"
                 onClick={() => refreshPerksOne(a)}
               />
             )}

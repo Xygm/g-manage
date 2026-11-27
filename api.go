@@ -28,7 +28,6 @@ type App struct {
 
 	browserLocks   sync.Map   // 规范化资料目录路径 → *sync.Mutex：同一浏览器资料目录同时只做一件事（写密码库 / 启动）
 	patrolJobs     sync.Map   // 规范化资料目录路径 → *patrolHandle：正在后台无头刷新权益的任务（用户点打开浏览器时立即抢占让路）
-	passiveWatches sync.Map   // 规范化资料目录路径 → bool：已挂载的日常浏览顺手同步协程
 	switchMu       sync.Mutex // 同一时间只做一次切号（会关闭 / 重启客户端、改凭据管理器）
 	serviceCheckMu sync.Mutex // 同一时间只运行一个对话探针
 }
@@ -397,14 +396,6 @@ func (a *App) launchFor(acc Account, url string) (warning string, err error) {
 	// 若该资料目录正在后台跑无头权益刷新，先取消并等它释放锁，避免新打开的窗口连进无头实例变「幽灵窗口」。
 	a.preemptPatrol(acc)
 
-	// 若该账号是自带独立浏览器且已经开着可见窗口（CDP 连通），直接通过 CDP 秒开并激活新标签页，
-	// 既更快，也避免重复起进程和触发 Windows「浏览器正开着写不了密码库」的误报。
-	if acc.ChromeProfile == "" {
-		if a.openTabViaActiveCDP(acc, url) {
-			return "", nil
-		}
-	}
-
 	st, err := a.store.GetSettings()
 	if err != nil {
 		return "", err
@@ -420,9 +411,6 @@ func (a *App) launchFor(acc Account, url string) (warning string, err error) {
 	}
 	if err := launchChrome(chrome, a.profilePath(acc), acc.ChromeProfile, proxyFor(acc, st), url); err != nil {
 		return "", errors.New("启动 Chrome 失败：" + err.Error())
-	}
-	if acc.ChromeProfile == "" {
-		a.startPassiveWatcher(acc.ID, filepath.Clean(a.profilePath(acc)))
 	}
 	return warning, nil
 }

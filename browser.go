@@ -94,10 +94,7 @@ func launchChrome(chrome, userDataDir, chromeProfile, proxy, url string) error {
 	if chromeProfile != "" {
 		args = append(args, "--profile-directory="+chromeProfile)
 	} else {
-		if !chromeRunning(userDataDir) {
-			_ = os.Remove(filepath.Join(userDataDir, "DevToolsActivePort"))
-		}
-		args = append(args, "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0")
+		args = append(args, "--no-first-run", "--no-default-browser-check")
 		if proxy != "" {
 			args = append(args, "--proxy-server="+proxy)
 		}
