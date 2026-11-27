@@ -40,8 +40,9 @@ export function Inspector({ id, inDrawer }: { id: number; inDrawer?: boolean }) 
   return (
     <div className="flex h-full flex-col">
       <InspectorHeader a={a} inDrawer={inDrawer} />
-      {/* 换号时不滑动整栏，框架不动，内容 110ms 轻淡入 */}
-      <motion.div key={a.id} initial={{ opacity: 0.4 }} animate={{ opacity: 1, transition: { duration: 0.11 } }} className="thin-scroll flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5 pt-0">
+      {/* 换号时不滑动整栏，框架不动，内容 110ms 轻淡入。
+          卡片一律不被压缩：展开动画外层带 overflow-hidden，内容超出窗口时会被压扁裁掉，应改为整栏滚动 */}
+      <motion.div key={a.id} initial={{ opacity: 0.4 }} animate={{ opacity: 1, transition: { duration: 0.11 } }} className="thin-scroll flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5 pt-0 *:shrink-0">
         <AuthCard a={a} />
         <ServiceCard a={a} />
         {urgentBill && <PerksCard a={a} />}
