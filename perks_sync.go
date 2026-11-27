@@ -182,23 +182,37 @@ func parseSubscriptionsText(text string) (state, ymd string, ok bool) {
 }
 
 // parseOnePlansText 从 one.google.com/about/plans?hl=en 识别真实档位与订阅渠道。
+// 套餐页会把 Pro、Ultra 全部列出来，只认离「Current plan」标记最近的那个套餐标题；
+// Ultra 5x / 20x 由开发者权益页的月度赠金区分，这里不细分（页面上每个套餐的介绍都会出现）。
 func parseOnePlansText(text, batchRaw string) (webTier, source string) {
-	lower := strings.ToLower(text)
-	switch {
-	case strings.Contains(lower, "current plan") && strings.Contains(lower, "google ai ultra"):
-		webTier = "ULTRA"
-	case strings.Contains(lower, "current plan") && strings.Contains(lower, "google ai pro"):
-		webTier = "PRO"
-	}
-	batchLower := strings.ToLower(batchRaw)
-	if webTier == "ULTRA" {
-		switch {
-		case strings.Contains(batchLower, "20x higher"):
-			webTier = "ULTRA_20X"
-		case strings.Contains(batchLower, "5x higher"):
-			webTier = "ULTRA_5X"
+	lines := strings.Split(strings.ToLower(text), "\n")
+	best := -1
+	for i, l := range lines {
+		if !strings.Contains(l, "current plan") {
+			continue
+		}
+		for j, t := range lines {
+			var tier string
+			switch strings.TrimSpace(t) {
+			case "google ai ultra":
+				tier = "ULTRA"
+			case "google ai pro":
+				tier = "PRO"
+			default:
+				continue
+			}
+			// 距离相同时取标记后面的标题（标记通常在卡片顶部）
+			d := 2 * (j - i)
+			if d < 0 {
+				d = -d + 1
+			}
+			if best < 0 || d < best {
+				best, webTier = d, tier
+			}
 		}
 	}
+	lower := strings.ToLower(text)
+	batchLower := strings.ToLower(batchRaw)
 	switch {
 	case strings.Contains(lower, "apple settings") || strings.Contains(batchLower, "g1.ios."):
 		source = "apple"
@@ -543,11 +557,21 @@ func rankWebTier(t string) int {
 	return 0
 }
 
+// mergeWebTier 合并同一次同步里各页面的档位信号，取最高的。
 func mergeWebTier(cur, candidate string) string {
 	if rankWebTier(candidate) > rankWebTier(cur) {
 		return candidate
 	}
 	return cur
+}
+
+// observeWebTier 用这次看到的档位更新存下的档位：降级、退订也要跟着变，不能只升不降；
+// 只有笼统的 ULTRA 不覆盖之前已细分出的 Ultra 5x / 20x。
+func observeWebTier(stored, seen string) string {
+	if seen == "" || (seen == "ULTRA" && strings.HasPrefix(stored, "ULTRA_")) {
+		return stored
+	}
+	return seen
 }
 
 // collectAllPerksOnSession 在单个后台标签页内串行访问目标页采集全部 5 项权益。
@@ -697,9 +721,7 @@ func collectAllPerksOnSession(ctx context.Context, cli *cdpClient, sessionID str
 			p.WebError = "该号独立浏览器尚未登录 Google，请先点「浏览器」完成登录"
 			return false, nil
 		}
-		if webTier != "" {
-			p.WebTier = mergeWebTier(p.WebTier, webTier)
-		}
+		p.WebTier = observeWebTier(p.WebTier, webTier)
 		if flowCredits != nil {
 			p.FlowCredits = flowCredits
 		}
@@ -1054,7 +1076,7 @@ func (a *App) passiveInspectTarget(cli *cdpClient, accountID int64, targetID, si
 				if next != "" {
 					p.FlowNextGrantAt = next
 				}
-				p.WebTier = mergeWebTier(p.WebTier, snap.Tier)
+				p.WebTier = observeWebTier(p.WebTier, snap.Tier)
 				p.WebStatus = "ok"
 				p.WebError = ""
 				return true, nil
@@ -1086,7 +1108,7 @@ func (a *App) passiveInspectTarget(cli *cdpClient, accountID int64, targetID, si
 				if month != "" {
 					p.APICreditClaimedMonth = month
 				}
-				p.WebTier = mergeWebTier(p.WebTier, tier)
+				p.WebTier = observeWebTier(p.WebTier, tier)
 				p.WebStatus = "ok"
 				p.WebError = ""
 				return true, nil
@@ -1113,7 +1135,7 @@ func (a *App) passiveInspectTarget(cli *cdpClient, accountID int64, targetID, si
 				p.FamilyRole = role
 				p.FamilyMembers = mem
 				p.FamilyPending = pend
-				p.WebTier = mergeWebTier(p.WebTier, tier)
+				p.WebTier = observeWebTier(p.WebTier, tier)
 				p.WebStatus = "ok"
 				p.WebError = ""
 				return true, nil
@@ -1123,7 +1145,7 @@ func (a *App) passiveInspectTarget(cli *cdpClient, accountID int64, targetID, si
 		t, src := parseOnePlansText(snap.Text, "")
 		if t != "" || src != "" {
 			_, _ = a.store.UpdatePerks(acc.ID, func(p *AccountPerks) (bool, error) {
-				p.WebTier = mergeWebTier(p.WebTier, t)
+				p.WebTier = observeWebTier(p.WebTier, t)
 				if src != "" {
 					p.BillingSource = src
 				}

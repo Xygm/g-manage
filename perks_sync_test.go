@@ -42,8 +42,25 @@ func TestParseRealGooglePayloads(t *testing.T) {
 		"Current plan\nGoogle AI Ultra\n20 TB\nTRY 1,989.99 / month\ngo to Apple Settings on your iPhone",
 		`"Gemini app with usage limits that are 5x higher than the AI Pro plan"`,
 	)
-	if wt != "ULTRA_5X" || src != "apple" {
+	if wt != "ULTRA" || src != "apple" {
 		t.Fatalf("parseOnePlansText got tier=%q src=%q", wt, src)
+	}
+
+	// Pro 号的套餐页同样列出 Ultra（以及它「20x higher」的介绍），只能认「Current plan」所在的那张卡片。
+	wt, _ = parseOnePlansText(
+		"Google AI Pro\nCurrent plan\n2 TB\nJPY 2,900 / month\nGoogle AI Ultra\n30 TB\nUpgrade",
+		`"usage limits that are 20x higher than the AI Pro plan"`,
+	)
+	if wt != "PRO" {
+		t.Fatalf("parseOnePlansText on a Pro account got tier=%q", wt)
+	}
+
+	// 退订降级后存下的档位要跟着降，笼统的 ULTRA 不覆盖已细分的 20x。
+	if got := observeWebTier("ULTRA_20X", "PRO"); got != "PRO" {
+		t.Fatalf("observeWebTier downgrade got %q", got)
+	}
+	if got := observeWebTier("ULTRA_20X", "ULTRA"); got != "ULTRA_20X" {
+		t.Fatalf("observeWebTier generic ultra got %q", got)
 	}
 
 	role, mem, pend, ft := parseFamilyDetailsText("Google AI Ultra plan\nYour family on Google\nYou can create a Family Group with up to 6 people\nGet started")

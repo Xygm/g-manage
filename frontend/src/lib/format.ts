@@ -99,8 +99,17 @@ export function level(p: number): Level {
   return p <= 0 ? "zero" : p < 20 ? "low" : "ok";
 }
 
+/**
+ * 档位优先级：手动设定 > 授权接口 > 网页识别。授权接口是 Google 官方返回的，但只分得出 Pro / Ultra；
+ * 网页识别（开发者权益页的月度赠金）只用来把 Ultra 细分成 5x / 20x，或给没授权的号补上档位。
+ */
 export function effectiveTier(a: Account): string {
-  return (a.perks?.tier_override || a.perks?.web_tier || a.quota?.tier || "").toUpperCase();
+  const override = (a.perks?.tier_override || "").toUpperCase();
+  if (override) return override;
+  const oauth = (a.quota?.tier || "").toUpperCase();
+  const web = (a.perks?.web_tier || "").toUpperCase();
+  if (!oauth) return web;
+  return oauth === "ULTRA" && web.startsWith("ULTRA_") ? web : oauth;
 }
 
 export function isPaidTier(tier: string): boolean {
