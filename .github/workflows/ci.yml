@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 前端构建同步、设计守护与双端测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Typecheck & build frontend
+        run: npm --prefix frontend run build
+
+      - name: Verify embedded web/ assets are up to date
+        run: |
+          if [ -n "$(git status --porcelain web/)" ]; then
+            echo "::error::检测到 frontend/ 源码与提交的 web/ 静态资源不一致！"
+            echo "请在本地运行：npm --prefix frontend run build，并将生成的 web/ 一并提交。"
+            git status -s web/
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go unit tests & design/UX guardrails
+        run: go test -race -v ./...
+
+      - name: Cross-compile check (Windows amd64 & Linux amd64)
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /dev/null .
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /dev/null .
+
+  macos-native:
+    name: macOS 原生 Cocoa 桌面壳编译校验
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build macOS .app bundle
+        run: SKIP_FRONTEND=1 ./build_mac.sh
