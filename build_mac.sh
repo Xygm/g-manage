@@ -19,7 +19,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 CGO_ENABLED=1 "$GO" build -trimpath -ldflags "-s -w" -o "$app/Contents/MacOS/gam" .
 
-# 图标：Go 画 1024px 原图，sips 缩出各尺寸，iconutil 打包成 icns。
+# 图标：tools/mkicon 把 assets/icon.png 做成留白带阴影的 1024px 原图，sips 缩出各尺寸，iconutil 打包成 icns。
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 "$GO" run tools/mkicon/main.go "$tmp"

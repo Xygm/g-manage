@@ -6,12 +6,7 @@ package main
 // 窗口、托盘和两个 WebView2 都在同一个系统线程上，由这里的消息循环驱动。
 
 import (
-	"bytes"
-	"image"
-	"image/color"
-	"image/png"
 	"log"
-	"math"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,7 +51,7 @@ var (
 	pRegisterWindowMessageW = user32.NewProc("RegisterWindowMessageW")
 	pIsWindowVisible        = user32.NewProc("IsWindowVisible")
 	pIsIconic               = user32.NewProc("IsIconic")
-	pCreateIconFromResEx    = user32.NewProc("CreateIconFromResourceEx")
+	pLoadImageW             = user32.NewProc("LoadImageW")
 	pMessageBoxW            = user32.NewProc("MessageBoxW")
 	pShellNotifyIconW       = shell32.NewProc("Shell_NotifyIconW")
 	pDwmSetWindowAttribute  = dwmapi.NewProc("DwmSetWindowAttribute")
@@ -107,7 +102,11 @@ const (
 
 	smCxScreen = 0
 	smCyScreen = 1
+	smCxIcon   = 11
 	smCxSmIcon = 49
+
+	imageIcon = 1
+	appIconID = 1 // build.sh 用 windres 把 tools/mkicon 生成的 app.ico 以这个编号编进 exe
 
 	monitorDefaultToNearest = 2
 	idcArrow                = 32512
@@ -182,7 +181,7 @@ var ui struct {
 	loadPrefs        func() UIPrefs
 	prefs            UIPrefs
 	instance         windows.Handle
-	icon             uintptr
+	icon, iconBig    uintptr // 程序图标：小尺寸给托盘和标题栏，大尺寸给 Alt+Tab 和任务栏
 	main, mini       *webWindow
 	windows          map[uintptr]*webWindow
 	trayOK           bool
@@ -211,7 +210,7 @@ func runUI(pageURL, dataDir string, loadPrefs func() UIPrefs) {
 	ui.prefs = loadPrefs()
 	ui.windows = map[uintptr]*webWindow{}
 	_ = windows.GetModuleHandleEx(0, nil, &ui.instance)
-	ui.icon = makeAppIcon()
+	ui.icon, ui.iconBig = loadAppIcon(smCxSmIcon), loadAppIcon(smCxIcon)
 
 	proc := windows.NewCallback(wndProc)
 	cursor := call(pLoadCursorW, 0, idcArrow)
@@ -221,7 +220,7 @@ func runUI(pageURL, dataDir string, loadPrefs func() UIPrefs) {
 	}{{"gamMain", 0}, {"gamMini", csDropShadow}, {"gamTray", 0}} {
 		wc := wndClassExW{
 			Style: c.style, WndProc: proc, Instance: ui.instance, ClassName: utf16(c.name),
-			Icon: windows.Handle(ui.icon), IconSm: windows.Handle(ui.icon), Cursor: windows.Handle(cursor),
+			Icon: windows.Handle(ui.iconBig), IconSm: windows.Handle(ui.icon), Cursor: windows.Handle(cursor),
 		}
 		wc.Size = uint32(unsafe.Sizeof(wc))
 		call(pRegisterClassExW, uintptr(unsafe.Pointer(&wc)))
@@ -586,57 +585,11 @@ func removeTrayIcon() {
 	call(pShellNotifyIconW, nimDelete, uintptr(unsafe.Pointer(&d)))
 }
 
-// makeAppIcon 画一个品牌色圆角方块 + 白色盾牌对勾的图标，用于托盘和窗口（程序本身没有图标资源）。
-func makeAppIcon() uintptr {
-	const n = 64
-	img := image.NewNRGBA(image.Rect(0, 0, n, n))
-	blue := color.NRGBA{0x00, 0x71, 0xE3, 0xFF}
-	white := color.NRGBA{0xFF, 0xFF, 0xFF, 0xFF}
-	inRoundRect := func(x, y, r float64) bool {
-		dx := math.Max(math.Max(r-x, x-(n-r)), 0)
-		dy := math.Max(math.Max(r-y, y-(n-r)), 0)
-		return dx*dx+dy*dy <= r*r
-	}
-	// 盾牌：上半是矩形，下半收成尖角。
-	inShield := func(x, y float64) bool {
-		if y < 14 || y > 52 || x < 18 || x > 46 {
-			return false
-		}
-		if y <= 34 {
-			return true
-		}
-		half := 14 * (52 - y) / 18
-		return math.Abs(x-32) <= half
-	}
-	nearSegment := func(px, py, ax, ay, bx, by, w float64) bool {
-		vx, vy := bx-ax, by-ay
-		t := math.Max(0, math.Min(1, ((px-ax)*vx+(py-ay)*vy)/(vx*vx+vy*vy)))
-		dx, dy := px-(ax+t*vx), py-(ay+t*vy)
-		return dx*dx+dy*dy <= w*w
-	}
-	for y := range n {
-		for x := range n {
-			fx, fy := float64(x)+0.5, float64(y)+0.5
-			if !inRoundRect(fx, fy, 14) {
-				continue
-			}
-			c := blue
-			if inShield(fx, fy) {
-				c = white
-				if nearSegment(fx, fy, 24, 32, 30, 38, 2.6) || nearSegment(fx, fy, 30, 38, 41, 26, 2.6) {
-					c = blue
-				}
-			}
-			img.SetNRGBA(x, y, c)
-		}
-	}
-	var buf bytes.Buffer
-	if png.Encode(&buf, img) != nil {
-		return 0
-	}
-	size := call(pGetSystemMetrics, smCxSmIcon) * 2
-	b := buf.Bytes()
-	return call(pCreateIconFromResEx, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), 1, 0x00030000, size, size, 0)
+// loadAppIcon 从 exe 的图标资源里按系统度量 metric 的两倍边长取图：程序没声明 DPI 感知，系统给的是 96 DPI 下的尺寸，
+// 取大一号再让系统缩小，高分屏上托盘和标题栏才不糊。没编进资源时返回 0（用系统默认图标）。
+func loadAppIcon(metric uintptr) uintptr {
+	size := call(pGetSystemMetrics, metric) * 2
+	return call(pLoadImageW, uintptr(ui.instance), appIconID, imageIcon, size, size, 0)
 }
 
 // uiShowMain 可在任意线程调用：让界面线程把主控制台调到前台。

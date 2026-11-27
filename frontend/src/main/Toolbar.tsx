@@ -181,7 +181,7 @@ function TagFilter() {
 }
 
 const sorts: { value: Sort; label: string }[] = [
-  { value: "smart", label: "按要处理的先后" },
+  { value: "smart", label: "在用、能用的在前" },
   { value: "days", label: "按登录天数" },
   { value: "quota", label: "按剩余额度" },
   { value: "email", label: "按邮箱" },

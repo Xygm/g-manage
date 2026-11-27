@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Command, Download, LockOpen, Plus, RefreshCw, Settings2, ShieldCheck } from "lucide-react";
+import { Command, Download, LockOpen, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { forwardRef } from "react";
 import { app, lockVault, refreshAll } from "../lib/app";
 import { isNativeMac, modLabel } from "../lib/bridge";
@@ -13,13 +13,7 @@ export const Header = forwardRef<HTMLElement>(function Header(_, ref) {
   const hasAuthed = useStore(app, (s) => s.accounts.some((a) => a.has_token));
   return (
     <header ref={ref} className={cx("flex h-[52px] shrink-0 items-center gap-2 pr-3", isNativeMac ? "pl-[84px]" : "pl-4")}>
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className="grid size-[22px] shrink-0 place-items-center rounded-[7px] bg-gradient-to-b from-[#3b8bff] to-[#0a6cff] text-white shadow-[inset_0_0.5px_0_rgb(255_255_255/0.35),0_1px_2px_rgb(10_108_255/0.35)]">
-          <ShieldCheck size={13} strokeWidth={2.2} />
-        </span>
-        <h1 className="truncate text-md font-semibold tracking-[-0.01em] text-ink">谷歌账号管理</h1>
-        <VaultPill />
-      </div>
+      <VaultPill />
       <div className="flex-1" />
       <Tooltip label="搜索账号或执行命令" kbd={modLabel("K")}>
         <button

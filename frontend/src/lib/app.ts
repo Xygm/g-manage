@@ -106,12 +106,13 @@ export function visibleAccounts(s: AppState): Account[] {
   return out;
 }
 
-let filtCache: { vis: Account[]; filter: Filter; tag: string; sort: Sort; query: string; out: Account[] } | null = null;
+let filtCache: { vis: Account[]; clients: ClientStatus[]; filter: Filter; tag: string; sort: Sort; query: string; out: Account[] } | null = null;
 export function filteredAccounts(s: AppState): Account[] {
   const vis = visibleAccounts(s);
   if (
     filtCache &&
     filtCache.vis === vis &&
+    filtCache.clients === s.clients &&
     filtCache.filter === s.filter &&
     filtCache.tag === s.tag &&
     filtCache.sort === s.sort &&
@@ -121,8 +122,8 @@ export function filteredAccounts(s: AppState): Account[] {
   }
   const out = vis
     .filter((a) => matchesFilter(a, s.filter) && (!s.tag || a.tags.includes(s.tag)) && matchesQuery(a, s.query))
-    .sort(comparer(s.sort));
-  filtCache = { vis, filter: s.filter, tag: s.tag, sort: s.sort, query: s.query, out };
+    .sort(comparer(s.sort, s.clients));
+  filtCache = { vis, clients: s.clients, filter: s.filter, tag: s.tag, sort: s.sort, query: s.query, out };
   return out;
 }
 

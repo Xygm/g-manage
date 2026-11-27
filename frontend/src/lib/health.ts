@@ -1,8 +1,8 @@
-import type { Account } from "./types";
+import type { Account, ClientStatus } from "./types";
 import { humanQuotaError } from "./format";
 
 /**
- * 系统替用户判断的「健康状态」，优先级从高到低：
+ * 系统替用户判断的「健康状态」（决定胶囊文案），优先级从高到低：
  *  disabled Antigravity 对话服务被限制（需申诉或待审核）
  *  pending  新密码待确认（不处理可能丢密码）
  *  due      风控期已过，该改密
@@ -28,8 +28,6 @@ export const needsAuth = (h: Health) => h === "revoked" || h === "unauth";
 export const accountNeedsPassword = (a: Account) => a.has_pending_password || a.status === "due";
 export const accountNeedsAuth = (a: Account) => !a.has_token || Boolean(a.quota_error && humanQuotaError(a.quota_error).revoked);
 
-const order: Record<Health, number> = { disabled: 0, pending: 1, due: 2, revoked: 3, risk: 4, unauth: 5, changed: 6 };
-
 export type Sort = "smart" | "email" | "days" | "quota";
 
 function minQuota(a: Account): number {
@@ -38,7 +36,8 @@ function minQuota(a: Account): number {
   return m;
 }
 
-export function comparer(sort: Sort): (x: Account, y: Account) => number {
+/** clients 是各客户端当前登录的号，默认排序把这些号放最上面。 */
+export function comparer(sort: Sort, clients: readonly ClientStatus[]): (x: Account, y: Account) => number {
   switch (sort) {
     case "email":
       return (x, y) => x.email.localeCompare(y.email);
@@ -46,15 +45,40 @@ export function comparer(sort: Sort): (x: Account, y: Account) => number {
       return (x, y) => y.login_days - x.login_days || x.id - y.id;
     case "quota":
       return (x, y) => minQuota(y) - minQuota(x) || x.id - y.id;
-    default:
-      return compareAccounts;
+    default: {
+      const inUse = new Set(clients.map((c) => c.account_id));
+      return (x, y) => {
+        const rx = rank(x, healthOf(x), inUse);
+        return rx - rank(y, healthOf(y), inUse) || (rx === rankRisk ? x.risk_left - y.risk_left : 0) || x.id - y.id;
+      };
+    }
   }
 }
 
-export function compareAccounts(x: Account, y: Account): number {
-  const hx = healthOf(x);
-  const hy = healthOf(y);
-  return order[hx] - order[hy] || (hx === "risk" ? x.risk_left - y.risk_left : 0) || x.id - y.id;
+const rankRisk = 1;
+
+/**
+ * 默认排序的分组，从上到下：切进 Antigravity 客户端在用的号 → 已授权（风控中、已改密）→ 授权过期、未授权
+ * → 待改密 → 服务已停用还没申诉 → 申诉审核中。
+ */
+function rank(a: Account, h: Health, inUse: ReadonlySet<number>): number {
+  if (inUse.has(a.id)) return 0;
+  switch (h) {
+    case "risk":
+      return rankRisk;
+    case "changed":
+      return 2;
+    case "revoked":
+      return 3;
+    case "unauth":
+      return 4;
+    case "pending":
+      return 5;
+    case "due":
+      return 6;
+    case "disabled":
+      return a.appeal_at > 0 ? 8 : 7;
+  }
 }
 
 /** 筛选按「要做什么」分：停用申诉、改密、授权异常。 */

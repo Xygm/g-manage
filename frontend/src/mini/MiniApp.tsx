@@ -548,14 +548,14 @@ function Results({
     const pool = pickingFor
       ? accounts.filter((a) => a.has_token && !a.service_disabled && !accountNeedsAuth(a) && a.id !== pickClient?.account_id)
       : accounts;
-    if (!q) return [...pool].sort(comparer(pickingFor ? "quota" : "smart")).slice(0, 40);
+    if (!q) return [...pool].sort(comparer(pickingFor ? "quota" : "smart", clients)).slice(0, 40);
     return pool
       .map((a) => ({ a, s: Math.max(fuzzyScore(a.email, q), fuzzyScore(a.note, q) * 0.8, ...a.tags.map((t) => fuzzyScore(t, q) * 0.7)) }))
       .filter((x) => x.s > 0)
       .sort((x, y) => y.s - x.s)
       .slice(0, 40)
       .map((x) => x.a);
-  }, [accounts, q, pickingFor, pickClient?.account_id]);
+  }, [accounts, clients, q, pickingFor, pickClient?.account_id]);
 
   const clampedIdx = list.length ? Math.min(activeIdx, list.length - 1) : 0;
 
