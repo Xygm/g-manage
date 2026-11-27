@@ -203,6 +203,33 @@ func (a *App) detachChromeProfiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"converted": n})
 }
 
+// detachAccountChrome 把单个仍关联日常 Chrome 资料的账号改为程序自带的独立浏览器，不影响其它账号。
+func (a *App) detachAccountChrome(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	acc, err := a.store.GetAccount(id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if acc.ChromeProfile != "" {
+		a.keepAvatar(acc.Email, filepath.Join(acc.ProfileDir, acc.ChromeProfile, avatarFile))
+	}
+	if err := a.store.SetBrowserProfile(acc.ID, "", ""); err != nil {
+		writeErr(w, err)
+		return
+	}
+	saved, err := a.store.GetAccount(id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.view(saved, today()))
+}
+
 func (a *App) savedAvatarPath(email string) string {
 	return filepath.Join(a.dataDir, "avatars", profileDirName(email)+".png")
 }

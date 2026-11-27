@@ -1,20 +1,21 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowDownUp, Search, Tag, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, Crown, Search, SlidersHorizontal, Sparkles, Tag, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { app, select, visibleAccounts } from "../lib/app";
-import { accountNeedsAuth, accountNeedsPassword, healthOf, type Filter, type Sort } from "../lib/health";
+import { app, resetListViewAuto, select, setListView, toggleListCol, visibleAccounts } from "../lib/app";
+import { countColumnData, desiredColumns, LIST_COLUMNS } from "../lib/columns";
+import { accountNeedsAuth, accountNeedsPassword, hasUrgentBilling, healthOf, isPaidAccount, type Filter, type Sort } from "../lib/health";
 import { useStore, shallowEqual } from "../lib/store";
 import { fade, spring } from "../lib/motion";
-import { IconButton, Kbd, cx } from "../ui/button";
+import { IconButton, Kbd, Tooltip, cx } from "../ui/button";
 import { TagChip, tagHue } from "../ui/display";
-import { Segmented, type SegItem } from "../ui/form";
+import { Segmented, Switch, type SegItem } from "../ui/form";
 import { Menu, Popover } from "../ui/overlay";
 
 export function Toolbar() {
   const counts = useStore(
     app,
     (s) => {
-      const c = { all: 0, disabled: 0, password: 0, auth: 0, risk: 0, changed: 0 };
+      const c = { all: 0, disabled: 0, password: 0, auth: 0, risk: 0, changed: 0, billing: 0, paid: 0 };
       for (const a of visibleAccounts(s)) {
         const h = healthOf(a);
         c.all++;
@@ -23,12 +24,15 @@ export function Toolbar() {
         if (accountNeedsAuth(a)) c.auth++;
         if (h === "risk") c.risk++;
         if (h === "changed") c.changed++;
+        if (hasUrgentBilling(a)) c.billing++;
+        if (isPaidAccount(a)) c.paid++;
       }
       return c;
     },
     shallowEqual,
   );
   const filter = useStore(app, (s) => s.filter);
+  const scope = useStore(app, (s) => s.scope);
   const segWrap = useRef<HTMLDivElement>(null);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -66,7 +70,39 @@ export function Toolbar() {
         <Segmented id="filter" items={items} value={filter} onChange={(f) => app.set({ filter: f })} />
       </div>
       <div className="flex min-w-[220px] flex-1 items-center justify-end gap-1.5 sm:flex-initial">
+        <AnimatePresence initial={false}>
+          {(counts.billing > 0 || scope === "billing") && (
+            <motion.button
+              key="billing-scope"
+              type="button"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1, transition: spring.snap }}
+              exit={{ opacity: 0, scale: 0.9, transition: fade.out }}
+              title="5 天内即将自动扣费或已过扣费日待核实的号"
+              onClick={() => app.set({ scope: scope === "billing" ? "all" : "billing" })}
+              className={cx(
+                "inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors duration-[120ms]",
+                scope === "billing" ? "bg-danger-dot text-white shadow-thumb" : "bg-danger-soft text-danger hover:brightness-95",
+              )}
+            >
+              <AlertTriangle size={12} strokeWidth={2.2} />
+              <span className="tnum">{counts.billing} 待退订</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
+        {(counts.paid > 0 || scope === "paid") && (
+          <Tooltip label={scope === "paid" ? `正在只看 Pro / Ultra（共 ${counts.paid} 个），再点恢复全部` : `只看 Pro / Ultra 会员号（${counts.paid} 个）`}>
+            <IconButton
+              icon={Crown}
+              label="只看 Pro / Ultra 会员号"
+              active={scope === "paid"}
+              onClick={() => app.set({ scope: scope === "paid" ? "all" : "paid" })}
+              className={cx(scope === "paid" && "!text-violet")}
+            />
+          </Tooltip>
+        )}
         <TagFilter />
+        <ColumnsMenu />
         <SortMenu />
         <SearchBox />
       </div>
@@ -180,10 +216,120 @@ function TagFilter() {
   );
 }
 
+function ColumnsMenu() {
+  const listView = useStore(app, (s) => s.listView);
+  const sort = useStore(app, (s) => s.sort);
+  const accounts = useStore(app, visibleAccounts);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+
+  const counts = useMemo(() => countColumnData(accounts), [accounts]);
+  const resolved = useMemo(() => desiredColumns(accounts, listView, sort), [accounts, listView, sort]);
+  const isCustom = listView.mode === "custom";
+
+  const perksCols = LIST_COLUMNS.filter((c) => c.group === "perks");
+  const coreCols = LIST_COLUMNS.filter((c) => c.group === "core");
+
+  return (
+    <>
+      <span className="relative inline-flex">
+        <IconButton
+          ref={ref}
+          icon={SlidersHorizontal}
+          label={isCustom ? "列表显示项（已自定义）" : "配置列表显示的权益与指标列"}
+          active={open}
+          onClick={() => setOpen((v) => !v)}
+        />
+        {isCustom && <span className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent" />}
+      </span>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} className="w-[260px] p-2">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-2 rounded-[8px] bg-surface-2 px-2.5 py-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1 text-xs font-semibold text-ink">
+                <Sparkles size={12} strokeWidth={2.1} className="text-accent" />
+                <span>智能自动显示</span>
+              </div>
+              <p className="mt-0.5 whitespace-nowrap text-2xs text-ink-3">有数据的列自动显示，无则隐藏</p>
+            </div>
+            <Switch
+              checked={!isCustom}
+              label="智能自动显示列表列"
+              onChange={(auto) => {
+                if (auto) resetListViewAuto();
+                else setListView({ mode: "custom", cols: resolved });
+              }}
+            />
+          </div>
+
+          <p className="px-2 pt-1.5 text-2xs font-semibold tracking-[0.03em] text-ink-3">会员与附赠权益列</p>
+          {perksCols.map((c) => {
+            const on = resolved[c.id];
+            const cnt = counts[c.id];
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={on}
+                onClick={() => toggleListCol(c.id, resolved)}
+                className="flex h-7 items-center gap-2 rounded-[7px] px-2 text-left text-sm text-ink transition-colors duration-[80ms] hover:bg-fill"
+              >
+                <span
+                  className={cx(
+                    "grid size-4 shrink-0 place-items-center rounded-[4.5px] transition-colors duration-[120ms]",
+                    on ? "bg-accent text-accent-fg" : "bg-fill shadow-[inset_0_0_0_1px_var(--line-strong)]",
+                  )}
+                >
+                  {on && <Check size={11} strokeWidth={2.8} />}
+                </span>
+                <span className="flex-1 truncate">{c.label}</span>
+                <span className="text-2xs tnum text-ink-3">{cnt > 0 ? `${cnt} 号` : "暂无"}</span>
+              </button>
+            );
+          })}
+
+          <div className="mx-1.5 my-0.5 h-px bg-line" />
+          <p className="px-2 pt-0.5 text-2xs font-semibold tracking-[0.03em] text-ink-3">基础信息列</p>
+          {coreCols.map((c) => {
+            const on = resolved[c.id];
+            const cnt = counts[c.id];
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={on}
+                onClick={() => toggleListCol(c.id, resolved)}
+                className="flex h-7 items-center gap-2 rounded-[7px] px-2 text-left text-sm text-ink transition-colors duration-[80ms] hover:bg-fill"
+              >
+                <span
+                  className={cx(
+                    "grid size-4 shrink-0 place-items-center rounded-[4.5px] transition-colors duration-[120ms]",
+                    on ? "bg-accent text-accent-fg" : "bg-fill shadow-[inset_0_0_0_1px_var(--line-strong)]",
+                  )}
+                >
+                  {on && <Check size={11} strokeWidth={2.8} />}
+                </span>
+                <span className="flex-1 truncate">{c.label}</span>
+                {c.id !== "status" && <span className="text-2xs tnum text-ink-3">{cnt > 0 ? `${cnt} 号` : "暂无"}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </Popover>
+    </>
+  );
+}
+
 const sorts: { value: Sort; label: string }[] = [
   { value: "smart", label: "在用、能用的在前" },
+  { value: "renewal", label: "按扣费/到期日" },
+  { value: "flow", label: "按剩余 Flow 积分" },
+  { value: "colab", label: "按剩余 Colab CU" },
+  { value: "api", label: "按 API 赠金状态" },
+  { value: "quota", label: "按反重力剩余额度" },
   { value: "days", label: "按登录天数" },
-  { value: "quota", label: "按剩余额度" },
   { value: "email", label: "按邮箱" },
 ];
 
@@ -197,7 +343,7 @@ function SortMenu() {
       <Popover open={open} onClose={() => setOpen(false)} anchor={ref}>
         <Menu
           onClose={() => setOpen(false)}
-          items={sorts.map((x) => ({ label: x.label, checked: x.value === sort, onSelect: () => app.set({ sort: x.value }) }))}
+          items={sorts.map((x) => ({ label: x.label, checked: x.value === sort, onSelect: () => app.set({ sort: x.value, sortDesc: true }) }))}
         />
       </Popover>
     </>

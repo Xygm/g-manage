@@ -1,16 +1,19 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import {
-  AlertTriangle, Check, ChevronDown, Copy, ExternalLink, Eye, EyeOff, Globe, KeyRound, Lock, Mail,
+  AlertTriangle, Check, ChevronDown, Copy, Crown, ExternalLink, Eye, EyeOff, Globe, KeyRound, Lock, Mail,
   MoreHorizontal, Pencil, Plus, RefreshCw, Shield, ShieldCheck, Shuffle, Trash2, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   appealAccount, app, authorize, cancelAwaitAuth, cancelPasswordChange, canSwitch, checkAccountService, CLIENTS, clientsOf, confirmPasswordChange,
-  copyPassword, copyPlain, copyTotp, deleteWithUndo, inputOf, markChanged, openTarget, openUrl, refreshOne,
-  regeneratePassword, reveal, saveAccount, setTagColor, setTags, startPasswordChange, switchClient, unlock,
+  copyPassword, copyPlain, copyTotp, deleteWithUndo, detachOneChrome, inputOf, markChanged, openTarget, openUrl, patchPerks, refreshOne,
+  refreshPerksOne, regeneratePassword, reveal, saveAccount, setTagColor, setTags, startPasswordChange, switchClient, unlock,
 } from "../lib/app";
-import { fmtCountdown, fmtTime, fromNow, humanQuotaError, pct, shortGroupName, tierLabel, windowLabel } from "../lib/format";
-import { accountNeedsAuth, healthOf } from "../lib/health";
+import {
+  apiCreditAmountLabel, calendarDaysUntil, currentMonthStr, effectiveTier, fmtCountdown, fmtTime, fromNow,
+  humanQuotaError, isPaidTier, isUltraTier, pct, shortGroupName, tierLabel, windowLabel,
+} from "../lib/format";
+import { accountNeedsAuth, billingAlertOf, healthOf } from "../lib/health";
 import { modLabel } from "../lib/bridge";
 import { useNow } from "../lib/hooks";
 import { useStore, shallowEqual } from "../lib/store";
@@ -33,6 +36,7 @@ export function Inspector({ id, inDrawer }: { id: number; inDrawer?: boolean }) 
       </div>
     );
   }
+  const urgentBill = Boolean(billingAlertOf(a)?.urgent);
   return (
     <div className="flex h-full flex-col">
       <InspectorHeader a={a} inDrawer={inDrawer} />
@@ -40,9 +44,11 @@ export function Inspector({ id, inDrawer }: { id: number; inDrawer?: boolean }) 
       <motion.div key={a.id} initial={{ opacity: 0.4 }} animate={{ opacity: 1, transition: { duration: 0.11 } }} className="thin-scroll flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5 pt-0">
         <AuthCard a={a} />
         <ServiceCard a={a} />
+        {urgentBill && <PerksCard a={a} />}
         <StatusCard a={a} />
         <CredentialsCard a={a} />
         <QuotaCard a={a} />
+        {!urgentBill && <PerksCard a={a} />}
         <DetailsCard a={a} />
       </motion.div>
     </div>
@@ -298,6 +304,7 @@ function ActionsRow({ a }: { a: Account }) {
           items={[
             { icon: Pencil, label: "编辑资料", kbd: modLabel("E"), onSelect: () => app.set({ sheet: { kind: "edit", id: a.id } }) },
             ...(a.has_token ? [{ icon: RefreshCw, label: "刷新额度", kbd: modLabel("R"), onSelect: () => refreshOne(a.id) }] : []),
+            ...(!a.chrome_profile ? [{ icon: Crown, label: "同步会员权益", onSelect: () => refreshPerksOne(a) }] : []),
             ...(a.has_token && !needAuth ? [{ icon: ShieldCheck, label: a.service_disabled ? "重新检测服务" : "检测服务可用性", onSelect: () => checkAccountService(a) }] : []),
             ...(a.has_token && !needAuth ? [{ icon: Shield, label: "重新授权", onSelect: () => authorize(a) }] : []),
             { icon: KeyRound, label: "打开 Google 改密页", onSelect: () => openTarget(a, "password") },
@@ -939,9 +946,9 @@ function QuotaCard({ a }: { a: Account }) {
       <CardTitle
         right={
           <>
-            {q?.tier && (
-              <Pill tone="violet" className="h-5">
-                {tierLabel(q.tier)}
+            {effectiveTier(a) && (
+              <Pill tone={isUltraTier(effectiveTier(a)) ? "violet" : effectiveTier(a) === "PRO" ? "accent" : "neutral"} className="h-5">
+                {tierLabel(effectiveTier(a))}
               </Pill>
             )}
             {a.quota_at > 0 && (
@@ -950,11 +957,13 @@ function QuotaCard({ a }: { a: Account }) {
               </Tooltip>
             )}
             {!a.service_disabled && (
-              <Tooltip label="直接用该账号发送一条最小真实对话，检测 Antigravity 是否可用（无需切号）">
-                <Button size="xs" variant="ghost" icon={ShieldCheck} busy={checking} onClick={() => checkAccountService(a)}>
-                  检测服务
-                </Button>
-              </Tooltip>
+              <IconButton
+                icon={ShieldCheck}
+                label="发送一条最小真实对话，检测 Antigravity 是否可用（无需切号）"
+                size="xs"
+                busy={checking}
+                onClick={() => checkAccountService(a)}
+              />
             )}
             <IconButton icon={RefreshCw} label="刷新这个号的额度" kbd={modLabel("R")} size="xs" busy={refreshing} onClick={() => refreshOne(a.id)} />
           </>
@@ -1022,16 +1031,527 @@ function QuotaCard({ a }: { a: Account }) {
   );
 }
 
+/* ───────── 会员与附赠权益（防反撸 + 算力积分 + 按月赠金 + 家庭组） ───────── */
+
+const TIER_CHOICES: { value: string; label: string; hint?: string }[] = [
+  { value: "", label: "跟随授权自动识别" },
+  { value: "PRO", label: "Google AI Pro", hint: "$19.99/月" },
+  { value: "ULTRA", label: "Google AI Ultra", hint: "自动细分" },
+  { value: "ULTRA_5X", label: "Google AI Ultra 5x", hint: "$99.99/月" },
+  { value: "ULTRA_20X", label: "Google AI Ultra 20x", hint: "$199.99/月" },
+  { value: "FREE", label: "Free 免费档" },
+];
+
+function PerksCard({ a }: { a: Account }) {
+  const now = useNow(60_000);
+  const syncing = useStore(app, (s) => s.syncingPerksIds.includes(a.id) || (s.syncingAllPerks && !a.chrome_profile));
+  const [expanded, setExpanded] = useState(false);
+  const [tierOpen, setTierOpen] = useState(false);
+  const tierBtnRef = useRef<HTMLButtonElement>(null);
+
+  const tier = effectiveTier(a);
+  const p = a.perks;
+  const hasPerks = isPaidTier(tier) || !!p || syncing;
+  const bill = billingAlertOf(a, now);
+  const daysLeft = calendarDaysUntil(p?.renewal_date, now);
+  const curMonth = currentMonthStr(now);
+  const claimedMonth = p?.api_credit_claimed_month || "";
+  const claimedNow = claimedMonth === curMonth;
+
+  if (!hasPerks && !expanded) {
+    return (
+      <Card className="py-2.5">
+        <div className="flex items-center gap-1.5">
+          <Crown size={13} strokeWidth={1.9} className="shrink-0 text-ink-3" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink-3">会员与附赠权益</span>
+          {!a.chrome_profile && (
+            <Button size="xs" variant="ghost" icon={RefreshCw} busy={syncing} onClick={() => refreshPerksOne(a)}>
+              自动读取
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => patchPerks(a, { tier_override: "PRO" }, { okMsg: "已标为 Pro 会员", undoPatch: { tier_override: "" }, flash: true })}
+          >
+            标 Pro
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => setExpanded(true)}>
+            展开
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  const prevState = p?.billing_state || "";
+  const syncLabel = syncing ? "正在读取网页权益…" : a.perks_at > 0 ? `${fromNow(a.perks_at, now)}同步` : "";
+  const apiAmt = p?.api_credit_total ? `$${p.api_credit_total}/月` : apiCreditAmountLabel(tier);
+
+  return (
+    <Card tone={bill?.urgent ? bill.tone : undefined}>
+      <CardTitle
+        right={
+          <>
+            {syncLabel && (
+              <Tooltip label={a.perks_at > 0 ? `最近自动同步：${fmtTime(a.perks_at)}` : "正在通过独立浏览器会话读取权益"}>
+                <span className={cx("text-2xs text-ink-3", syncing && "breathe text-accent")}>{syncLabel}</span>
+              </Tooltip>
+            )}
+            <button
+              ref={tierBtnRef}
+              type="button"
+              onClick={() => setTierOpen((v) => !v)}
+              className={cx(
+                "inline-flex h-5 items-center gap-1 rounded-full px-2 text-xs font-medium transition-colors duration-[120ms] hover:brightness-95",
+                isUltraTier(tier) ? "bg-violet-soft text-violet" : tier === "PRO" ? "bg-accent-soft text-accent" : "bg-fill text-ink-2",
+              )}
+            >
+              <span>{tier ? tierLabel(tier) : "设档位"}</span>
+              <ChevronDown size={11} strokeWidth={2.2} />
+            </button>
+            <Popover open={tierOpen} onClose={() => setTierOpen(false)} anchor={tierBtnRef}>
+              <Menu
+                onClose={() => setTierOpen(false)}
+                items={TIER_CHOICES.map((c) => ({
+                  label: c.label,
+                  hint: c.hint,
+                  checked: (p?.tier_override || "") === c.value,
+                  onSelect: () =>
+                    patchPerks(a, { tier_override: c.value }, {
+                      okMsg: c.value ? `已设为 ${tierLabel(c.value)}` : "已恢复跟随授权识别",
+                      undoPatch: { tier_override: p?.tier_override || "" },
+                    }),
+                }))}
+              />
+            </Popover>
+            {!a.chrome_profile && (
+              <IconButton
+                icon={RefreshCw}
+                size="xs"
+                busy={syncing}
+                label="从该号独立浏览器自动同步 Flow 积分、Colab CU 与订阅账期"
+                onClick={() => refreshPerksOne(a)}
+              />
+            )}
+          </>
+        }
+      >
+        会员与附赠权益
+      </CardTitle>
+
+      <Collapse open={p?.web_status === "needs_login" || p?.web_status === "account_mismatch"}>
+        {(p?.web_status === "needs_login" || p?.web_status === "account_mismatch") && (
+          <div className="mb-2 flex items-start gap-2 rounded-[7px] bg-warn-soft px-2.5 py-2 text-xs text-warn">
+            <AlertTriangle size={13} strokeWidth={2.2} className="mt-px shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p>{p.web_error || "这个号的独立浏览器尚未登录 Google"}</p>
+              <button type="button" onClick={() => openTarget(a, "browser")} className="mt-0.5 font-semibold underline-offset-2 hover:underline">
+                打开这个号的浏览器去登录 →
+              </button>
+            </div>
+          </div>
+        )}
+      </Collapse>
+
+      {/* 1. 账期与自动续费防反撸 */}
+      <div className="rounded-[8px] bg-surface-2 p-2.5 shadow-[inset_0_0_0_0.5px_var(--line-strong)]">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {bill ? (
+            <Pill tone={bill.tone} dot title={bill.hint}>
+              {bill.text}
+            </Pill>
+          ) : p?.billing_state === "auto_renew" ? (
+            <Pill tone="warn" dot>
+              自动续费中
+            </Pill>
+          ) : p?.billing_state === "cancelled" ? (
+            <Pill tone="ok" dot>
+              已关续费
+            </Pill>
+          ) : p?.billing_state === "expired" ? (
+            <Pill tone="neutral">已到期</Pill>
+          ) : (
+            <Pill tone="neutral">续费状态未记</Pill>
+          )}
+          <span className="flex-1" />
+          {p?.billing_state === "auto_renew" ? (
+            <Button
+              size="xs"
+              variant="secondary"
+              icon={Check}
+              onClick={() =>
+                patchPerks(a, { billing_state: "cancelled" }, { okMsg: "已记为已关自动续费", undoPatch: { billing_state: prevState }, flash: true })
+              }
+            >
+              标为已关续费
+            </Button>
+          ) : p?.billing_state === "cancelled" ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => patchPerks(a, { billing_state: "auto_renew" }, { okMsg: "已改为自动续费中", undoPatch: { billing_state: prevState } })}
+            >
+              改为自动续费
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => patchPerks(a, { billing_state: "auto_renew" }, { okMsg: "已记为自动续费中", undoPatch: { billing_state: prevState } })}
+              >
+                自动续费
+              </Button>
+              <Button
+                size="xs"
+                variant="secondary"
+                icon={Check}
+                onClick={() =>
+                  patchPerks(a, { billing_state: "cancelled" }, { okMsg: "已记为已关续费", undoPatch: { billing_state: prevState }, flash: true })
+                }
+              >
+                已关续费
+              </Button>
+            </>
+          )}
+          <IconButton icon={ExternalLink} size="xs" label="在浏览器打开 Google 订阅管理" onClick={() => openTarget(a, "subscriptions")} />
+        </div>
+
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          <span className="shrink-0 text-ink-3">{p?.billing_state === "auto_renew" ? "扣费日" : "到期日"}</span>
+          <PerksDateInput
+            value={p?.renewal_date || ""}
+            onCommit={(next) =>
+              patchPerks(a, { renewal_date: next }, {
+                okMsg: next ? `账期日已记为 ${next}` : "已清空账期日",
+                undoPatch: { renewal_date: p?.renewal_date || "" },
+              })
+            }
+          />
+          <span className="flex-1" />
+          {daysLeft !== null && (
+            <span className={cx("shrink-0 tnum", bill?.urgent ? "font-medium text-danger" : daysLeft <= 5 && daysLeft >= 0 ? "text-warn" : "text-ink-3")}>
+              {daysLeft === 0 ? "今天" : daysLeft > 0 ? `${daysLeft} 天后` : `已过 ${-daysLeft} 天`}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* 2. 双格算力与积分磁贴（严格适配 344px 卡片净宽，不换行） */}
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+        <div className="flex min-w-0 flex-col rounded-[8px] bg-surface-2 px-2.5 py-2 shadow-[inset_0_0_0_0.5px_var(--line-strong)]">
+          <div className="flex items-center justify-between gap-1">
+            <span className="truncate text-xs font-medium text-ink-2">Flow 积分</span>
+            <IconButton icon={ExternalLink} size="xs" label="在这个号的浏览器打开 Flow" onClick={() => openTarget(a, "flow")} className="-mr-1 -my-0.5" />
+          </div>
+          <InlineMetricEditor
+            value={p?.flow_credits}
+            integer
+            ariaLabel="Flow 剩余积分"
+            onCommit={(v) => patchPerks(a, v === null ? { clear_flow_credits: true } : { flow_credits: v })}
+          />
+          <p className="mt-0.5 truncate text-2xs text-ink-3">
+            {p?.flow_next_grant_at ? `${p.flow_next_grant_at} 到账` : "月度刷新 · 不滚存"}
+          </p>
+        </div>
+
+        <div className="flex min-w-0 flex-col rounded-[8px] bg-surface-2 px-2.5 py-2 shadow-[inset_0_0_0_0.5px_var(--line-strong)]">
+          <div className="flex items-center justify-between gap-1">
+            <span className="truncate text-xs font-medium text-ink-2">Colab</span>
+            <IconButton icon={ExternalLink} size="xs" label="在这个号的浏览器打开 Colab" onClick={() => openTarget(a, "colab")} className="-mr-1 -my-0.5" />
+          </div>
+          <InlineMetricEditor
+            value={p?.colab_cu}
+            unit="CU"
+            ariaLabel="Colab 剩余计算单元"
+            onCommit={(v) => patchPerks(a, v === null ? { clear_colab_cu: true } : { colab_cu: v })}
+          />
+          <p className="mt-0.5 truncate text-2xs text-ink-3">
+            {p?.colab_note_date
+              ? `${p.colab_note_date} 过期`
+              : p?.colab_gpus?.length
+                ? `可用 ${p.colab_gpus.slice(0, 3).join(" · ")}`
+                : p?.colab_observed_at
+                  ? `自 ${p.colab_observed_at.slice(5)} 记录`
+                  : "单笔 90 天内有效"}
+          </p>
+        </div>
+      </div>
+
+      {/* 3. 低频权益：API 月度赠金 + 家庭组席位 + Google One */}
+      <div className="mt-1.5 flex flex-col gap-0.5">
+        <div className="flex h-8 items-center gap-1.5 rounded-[7px] px-1.5 transition-colors duration-[120ms] hover:bg-fill/45">
+          <span className="shrink-0 text-xs font-medium text-ink-2">API 赠金</span>
+          <span className="truncate text-2xs text-ink-3">{apiAmt}</span>
+          <span className="flex-1" />
+          {claimedNow ? (
+            <Tooltip label={p?.api_credit_balance !== undefined ? `本月已激活 · 剩余可用 $${p.api_credit_balance.toFixed(2)}` : `已记录 ${curMonth} 激活`}>
+              <span className="shrink-0 text-xs font-medium tnum text-ok">
+                {p?.api_credit_balance !== undefined ? `剩 $${p.api_credit_balance.toFixed(2).replace(/\.00$/, "")}` : "本月已领"}
+              </span>
+            </Tooltip>
+          ) : claimedMonth ? (
+            <Tooltip label={`上次记录领取：${claimedMonth}，本月可领新一期`}>
+              <span className="shrink-0 text-xs text-warn">本月待领</span>
+            </Tooltip>
+          ) : (
+            <span className="shrink-0 text-xs text-ink-3">本月待领</span>
+          )}
+          <Button
+            size="xs"
+            variant={claimedNow ? "ghost" : "soft"}
+            onClick={() =>
+              patchPerks(
+                a,
+                { api_credit_claimed_month: claimedNow ? "" : curMonth },
+                {
+                  okMsg: claimedNow ? "已撤回本月赠金记录" : `已记为 ${curMonth} 赠金已激活`,
+                  undoPatch: { api_credit_claimed_month: claimedMonth },
+                  flash: !claimedNow,
+                },
+              )
+            }
+          >
+            {claimedNow ? "撤回" : "记已领"}
+          </Button>
+          <IconButton icon={ExternalLink} size="xs" label="在这个号的浏览器打开开发者赠金页" onClick={() => openTarget(a, "benefits")} />
+        </div>
+
+        <div className="flex h-8 items-center gap-1.5 rounded-[7px] px-1.5 transition-colors duration-[120ms] hover:bg-fill/45">
+          <span className="shrink-0 text-xs font-medium text-ink-2">家庭组</span>
+          <span className="flex-1" />
+          <FamilySeatMenu a={a} />
+          <IconButton icon={ExternalLink} size="xs" label="在这个号的浏览器打开 Google 家庭组" onClick={() => openTarget(a, "family")} />
+          <IconButton icon={Globe} size="xs" label="在这个号的浏览器打开 Google One 设置" onClick={() => openTarget(a, "one")} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function PerksDateInput({ value, onCommit }: { value: string; onCommit: (next: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value);
+  useEffect(() => setVal(value), [value]);
+
+  const commit = (raw: string) => {
+    setEditing(false);
+    const trimmed = raw.trim();
+    if (trimmed === value) return;
+    if (trimmed && !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      setVal(value);
+      return;
+    }
+    onCommit(trimmed);
+  };
+
+  if (editing) {
+    return (
+      <input
+        type="date"
+        autoFocus
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(e.currentTarget.value);
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setVal(value);
+            setEditing(false);
+          }
+        }}
+        className="h-6 rounded-[6px] bg-surface px-1.5 font-mono text-xs text-ink outline-none shadow-[0_0_0_1px_var(--accent)]"
+      />
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className={cx(
+          "h-6 rounded-[6px] px-1.5 font-mono text-xs transition-colors duration-[120ms] hover:bg-fill",
+          value ? "text-ink" : "font-sans text-ink-3",
+        )}
+      >
+        {value || "设置日期"}
+      </button>
+      {value && (
+        <button
+          type="button"
+          aria-label="清空账期日"
+          onClick={() => onCommit("")}
+          className="grid size-4 place-items-center rounded-full text-ink-3 hover:bg-fill hover:text-ink-2"
+        >
+          <X size={10} strokeWidth={2.4} />
+        </button>
+      )}
+    </span>
+  );
+}
+
+function InlineMetricEditor({
+  value,
+  unit,
+  integer,
+  ariaLabel,
+  onCommit,
+}: {
+  value: number | undefined;
+  unit?: string;
+  integer?: boolean;
+  ariaLabel: string;
+  onCommit: (next: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+
+  const start = () => {
+    setVal(value === undefined ? "" : String(value));
+    setEditing(true);
+  };
+
+  const commit = () => {
+    setEditing(false);
+    const trimmed = val.trim().replace(/,/g, "");
+    if (!trimmed) {
+      if (value !== undefined) onCommit(null);
+      return;
+    }
+    const n = integer ? parseInt(trimmed, 10) : parseFloat(trimmed);
+    if (!Number.isFinite(n) || n < 0) return;
+    if (n !== value) onCommit(n);
+  };
+
+  if (editing) {
+    return (
+      <input
+        type="text"
+        inputMode={integer ? "numeric" : "decimal"}
+        autoFocus
+        aria-label={ariaLabel}
+        value={val}
+        placeholder="留空清除"
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) commit();
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setEditing(false);
+          }
+        }}
+        className="mt-1 h-7 w-full rounded-[6px] bg-surface px-1.5 font-mono text-sm font-semibold text-ink outline-none shadow-[0_0_0_1px_var(--accent)]"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={start}
+      title="点一下记录或修改余量"
+      className="-mx-1 mt-0.5 flex h-7 items-baseline gap-1 rounded-[6px] px-1 text-left transition-colors duration-[120ms] hover:bg-fill"
+    >
+      {value !== undefined ? (
+        <>
+          <span className="truncate text-lg font-semibold leading-7 tnum text-ink">
+            {integer || Number.isInteger(value) ? value.toLocaleString("en-US") : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}
+          </span>
+          {unit && <span className="shrink-0 text-xs text-ink-3">{unit}</span>}
+        </>
+      ) : (
+        <span className="text-xs text-ink-3">点此记录</span>
+      )}
+    </button>
+  );
+}
+
+function FamilySeatMenu({ a }: { a: Account }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const p = a.perks;
+  const role = p?.family_role || "";
+  const used = (p?.family_members || 0) + (p?.family_pending || 0);
+  const freeSeats = Math.max(0, 6 - Math.max(1, used));
+
+  const label =
+    role === "manager"
+      ? `家长 · 空 ${freeSeats}/5`
+      : role === "member"
+        ? "家庭成员"
+        : role === "none"
+          ? "未建组"
+          : "未记席位";
+
+  const choices: { label: string; hint?: string; role: "none" | "manager" | "member" | ""; members: number }[] = [
+    { label: "未建家庭组", hint: "可拉 5 人", role: "none", members: 0 },
+    { label: "家长 · 空 5/5", hint: "仅自己 1 人", role: "manager", members: 1 },
+    { label: "家长 · 空 4/5", hint: "已占 2 人", role: "manager", members: 2 },
+    { label: "家长 · 空 3/5", hint: "已占 3 人", role: "manager", members: 3 },
+    { label: "家长 · 空 2/5", hint: "已占 4 人", role: "manager", members: 4 },
+    { label: "家长 · 空 1/5", hint: "已占 5 人", role: "manager", members: 5 },
+    { label: "家长 · 已满 (0/5)", hint: "满员 6 人", role: "manager", members: 6 },
+    { label: "家庭组成员", hint: "共享主号权益", role: "member", members: 0 },
+  ];
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex h-6 items-center gap-1 rounded-[6px] px-1.5 text-xs text-ink-2 transition-colors duration-[120ms] hover:bg-fill hover:text-ink"
+      >
+        <span className="tnum">{label}</span>
+        <ChevronDown size={11} strokeWidth={2} className="text-ink-3" />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={ref}>
+        <Menu
+          onClose={() => setOpen(false)}
+          items={choices.map((c) => ({
+            label: c.label,
+            hint: c.hint,
+            checked: role === c.role && (c.role !== "manager" || (p?.family_members || 1) === c.members),
+            onSelect: () => patchPerks(a, { family_role: c.role, family_members: c.members, family_pending: 0 }),
+          }))}
+        />
+      </Popover>
+    </>
+  );
+}
+
 /* ───────── 资料 ───────── */
 
 function DetailsCard({ a }: { a: Account }) {
   const defaultProxy = useStore(app, (s) => s.settings?.default_proxy || "");
+  const [confirmDetach, setConfirmDetach] = useState(false);
+  const detachRef = useRef<HTMLButtonElement>(null);
   const rows: [string, React.ReactNode][] = [
     ["首次登录", `${a.login_date}（${a.login_days} 天前）`],
     ["风控期", `${a.risk_days} 天`],
     ["改密日期", a.pwd_changed_date || "本次登录后还没改"],
     ["代理", a.proxy || (defaultProxy ? `默认 · ${defaultProxy}` : "直连")],
-    ["浏览器", a.chrome_profile ? `日常 Chrome · ${a.chrome_profile}` : "自带独立浏览器"],
+    [
+      "浏览器",
+      a.chrome_profile ? (
+        <span className="inline-flex max-w-full items-center gap-1.5">
+          <span className="truncate">日常 Chrome · {a.chrome_profile}</span>
+          <button
+            ref={detachRef}
+            type="button"
+            onClick={() => setConfirmDetach(true)}
+            className="shrink-0 text-xs font-medium text-accent hover:underline"
+          >
+            改为自带
+          </button>
+        </span>
+      ) : (
+        "自带独立浏览器"
+      ),
+    ],
   ];
   return (
     <Card>
@@ -1058,6 +1578,15 @@ function DetailsCard({ a }: { a: Account }) {
           <span className="truncate font-mono">{a.profile_path}</span>
         </button>
       </Tooltip>
+      <ConfirmPop
+        open={confirmDetach}
+        onClose={() => setConfirmDetach(false)}
+        anchor={detachRef}
+        title="把这个号换成自带独立浏览器？"
+        message="只改当前这一个号，不影响其它账号。下次打开需要登录一次（头像会保留）。"
+        confirmLabel="换成自带"
+        onConfirm={() => detachOneChrome(a)}
+      />
     </Card>
   );
 }

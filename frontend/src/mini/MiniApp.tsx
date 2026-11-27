@@ -6,7 +6,7 @@ import {
   appealAccount, app, canSwitch, checkAccountService, CLIENTS, copyPlain, copyTotp, isNextCandidate, isUnlocked, loadAll, loadClients,
   openTarget, reloadAccounts, switchClient, switchNext, unlock, visibleAccounts,
 } from "../lib/app";
-import { fmtCountdown, fmtTime, fromNow, fuzzyScore, humanQuotaError, pct, poolRemaining, shortGroupName, tierLabel, windowLabel } from "../lib/format";
+import { effectiveTier, fmtCountdown, fmtTime, fromNow, fuzzyScore, humanQuotaError, isUltraTier, pct, poolRemaining, shortGroupName, tierLabel, windowLabel } from "../lib/format";
 import { accountNeedsAuth, comparer, healthLabel, healthOf } from "../lib/health";
 import { copyText, post, shell } from "../lib/bridge";
 import { useNow } from "../lib/hooks";
@@ -414,9 +414,9 @@ function ClientCard({ c, onPick, onCopyPassword }: { c: ClientStatus; onPick: ()
             {a ? healthLabel(a).text : c.email ? "这个号不在列表里，看不到额度" : `${meta.name} 还没登录`}
           </p>
         </div>
-        {a?.quota?.tier && !(a.service_disabled && a.appeal_at > 0) && (
-          <Pill tone="violet" className="h-5">
-            {tierLabel(a.quota.tier)}
+        {a && effectiveTier(a) && !(a.service_disabled && a.appeal_at > 0) && (
+          <Pill tone={isUltraTier(effectiveTier(a)) ? "violet" : effectiveTier(a) === "PRO" ? "accent" : "neutral"} className="h-5">
+            {tierLabel(effectiveTier(a))}
           </Pill>
         )}
       </div>
@@ -548,7 +548,7 @@ function Results({
     const pool = pickingFor
       ? accounts.filter((a) => a.has_token && !a.service_disabled && !accountNeedsAuth(a) && a.id !== pickClient?.account_id)
       : accounts;
-    if (!q) return [...pool].sort(comparer(pickingFor ? "quota" : "smart", clients)).slice(0, 40);
+    if (!q) return [...pool].sort(comparer(pickingFor ? "quota" : "smart", true, clients)).slice(0, 40);
     return pool
       .map((a) => ({ a, s: Math.max(fuzzyScore(a.email, q), fuzzyScore(a.note, q) * 0.8, ...a.tags.map((t) => fuzzyScore(t, q) * 0.7)) }))
       .filter((x) => x.s > 0)
@@ -623,7 +623,7 @@ function Results({
       <LayoutGroup id="mini-results">
         <div ref={listRef} className="thin-scroll min-h-0 flex-1 overflow-y-auto rounded-[10px] bg-surface p-1 shadow-raised">
           <p className="px-2 pb-1 pt-1.5 text-2xs font-semibold tracking-[0.02em] text-ink-3">
-            {pickingFor ? `点选一个号切到 ${CLIENTS[pickingFor].short}` : !q ? "要处理的排在前面 · 输入可以搜" : `找到 ${list.length} 个号`}
+            {pickingFor ? `点选一个号切到 ${CLIENTS[pickingFor].short}` : !q ? "在用、能用的排在前面 · 输入可以搜" : `找到 ${list.length} 个号`}
           </p>
           {list.map((a, idx) => (
             <ResultRow

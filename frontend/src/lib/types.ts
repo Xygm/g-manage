@@ -19,6 +19,61 @@ export interface QuotaInfo {
   groups: QuotaGroup[];
 }
 
+export type OpenTarget =
+  | "browser"
+  | "mail"
+  | "password"
+  | "one"
+  | "subscriptions"
+  | "flow"
+  | "colab"
+  | "benefits"
+  | "family";
+
+export type BillingState = "" | "auto_renew" | "cancelled" | "expired";
+export type FamilyRole = "" | "none" | "manager" | "member";
+
+export interface AccountPerks {
+  tier_override?: string;
+  web_tier?: string;
+  billing_state?: BillingState;
+  renewal_date?: string;
+  billing_source?: string;
+  billing_manual?: boolean;
+  flow_credits?: number;
+  flow_next_grant_at?: string;
+  colab_cu?: number;
+  colab_gpus?: string[];
+  colab_observed_at?: string;
+  colab_note_date?: string;
+  api_credit_claimed_month?: string;
+  api_credit_balance?: number;
+  api_credit_total?: number;
+  family_role?: FamilyRole;
+  family_members?: number;
+  family_pending?: number;
+  web_status?: string;
+  billing_auth?: string;
+  web_error?: string;
+}
+
+export interface PerksPatch {
+  tier_override?: string;
+  billing_state?: BillingState;
+  renewal_date?: string;
+  billing_manual?: boolean;
+  flow_credits?: number;
+  clear_flow_credits?: boolean;
+  flow_next_grant_at?: string;
+  colab_cu?: number;
+  clear_colab_cu?: boolean;
+  colab_note_date?: string;
+  api_credit_claimed_month?: string;
+  family_role?: FamilyRole;
+  family_members?: number;
+  family_pending?: number;
+}
+
 export interface Account {
   id: number;
   email: string;
@@ -33,6 +88,7 @@ export interface Account {
   created_at: number;
   quota_error: string;
   quota_at: number;
+  perks_at: number;
   service_disabled: boolean;
   service_error_id: string;
   appeal_at: number;
@@ -47,6 +103,7 @@ export interface Account {
   has_totp: boolean;
   has_pending_password: boolean;
   quota: QuotaInfo | null;
+  perks: AccountPerks | null;
 }
 
 export type ClientTarget = "agy" | "ide" | "classic";
@@ -107,9 +164,13 @@ export interface ChromeProfile {
   account_id: number;
 }
 
+export type ListColId = "tags" | "status" | "flow" | "colab" | "api" | "renewal" | "quota" | "totp";
+
 export interface UIPrefs {
   lightweight: boolean;
   mini_pinned: boolean;
+  list_mode?: "auto" | "custom";
+  list_cols?: Partial<Record<ListColId, boolean>>;
 }
 
 export interface SwitchResult {

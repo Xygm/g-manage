@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useState } from "react";
 import { fade, spring } from "../lib/motion";
-import { level, pct } from "../lib/format";
+import { isPaidTier, isUltraTier, level, pct, tierLabel } from "../lib/format";
 import { cx } from "./button";
 
 /* ───────── 数字滚动（计数、天数）：只滚变化的那一位，等宽不跳 ───────── */
@@ -36,12 +36,12 @@ function Digit({ d }: { d: number }) {
 export type PillTone = "warn" | "danger" | "neutral" | "ok" | "accent" | "violet";
 
 const pillTone: Record<PillTone, string> = {
-  warn: "bg-warn-soft text-warn",
-  danger: "bg-danger-soft text-danger",
+  warn: "bg-warn-soft text-warn shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--warn)_22%,transparent)]",
+  danger: "bg-danger-soft text-danger shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--danger)_22%,transparent)]",
   neutral: "bg-fill text-ink-2",
   ok: "text-ink-3",
-  accent: "bg-accent-soft text-accent",
-  violet: "bg-violet-soft text-violet",
+  accent: "bg-accent-soft text-accent shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--accent)_24%,transparent)]",
+  violet: "bg-violet-soft text-violet shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--violet)_24%,transparent)]",
 };
 const dotTone: Record<PillTone, string> = {
   warn: "bg-warn-dot",
@@ -100,7 +100,11 @@ export function QuotaBar({ fraction, thin, className, label }: { fraction: numbe
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={fraction === null ? undefined : p}
-      className={cx("relative block overflow-hidden rounded-full bg-fill", thin ? "h-1" : "h-1.5", className)}
+      className={cx(
+        "relative block overflow-hidden rounded-full bg-fill shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.07)]",
+        thin ? "h-[4.5px]" : "h-1.5",
+        className,
+      )}
     >
       {fraction !== null && (
         <span
@@ -177,13 +181,54 @@ export function Avatar({ src, email, size = 28, className }: { src?: string; ema
   const [failed, setFailed] = useState(false);
   let h = 0;
   for (const c of email) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const base = avatarHues[h % avatarHues.length];
   const style = { width: size, height: size, fontSize: size * 0.42 };
   if (src && !failed) {
-    return <img src={src} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setFailed(true)} className={cx("shrink-0 rounded-full object-cover shadow-[0_0_0_0.5px_var(--line-strong)]", className)} style={style} />;
+    return (
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        onError={() => setFailed(true)}
+        className={cx("shrink-0 rounded-full object-cover shadow-[0_0_0_0.5px_var(--line-strong),0_1px_2px_rgb(0_0_0/0.06)]", className)}
+        style={style}
+      />
+    );
   }
   return (
-    <span aria-hidden className={cx("grid shrink-0 place-items-center rounded-full font-semibold uppercase text-white", className)} style={{ ...style, background: avatarHues[h % avatarHues.length] }}>
+    <span
+      aria-hidden
+      className={cx(
+        "grid shrink-0 place-items-center rounded-full font-semibold uppercase text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.28),inset_0_0_0_0.5px_rgb(0_0_0/0.12)] [text-shadow:0_0.5px_1px_rgb(0_0_0/0.16)]",
+        className,
+      )}
+      style={{
+        ...style,
+        background: `linear-gradient(155deg, color-mix(in srgb, ${base} 80%, white), ${base} 56%, color-mix(in srgb, ${base} 86%, black))`,
+      }}
+    >
       {email.charAt(0)}
+    </span>
+  );
+}
+
+/** 会员档位微徽标：带表面衬底与 0.5px 内描边，在浅蓝选中行上依然边界分明不融化。 */
+export function TierBadge({ tier, className }: { tier: string; className?: string }) {
+  if (!isPaidTier(tier)) return null;
+  const ultra = isUltraTier(tier);
+  return (
+    <span
+      className={cx(
+        "inline-flex h-[17px] shrink-0 items-center rounded-[5px] px-1 text-2xs font-semibold leading-none tracking-[0.01em]",
+        ultra
+          ? "bg-[linear-gradient(180deg,color-mix(in_srgb,var(--violet)_16%,var(--surface)),color-mix(in_srgb,var(--violet)_9%,var(--surface)))] text-violet shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--violet)_32%,transparent)]"
+          : "bg-[color-mix(in_srgb,var(--accent)_11%,var(--surface))] text-accent shadow-[inset_0_0_0_0.5px_color-mix(in_srgb,var(--accent)_30%,transparent)]",
+        className,
+      )}
+    >
+      {tierLabel(tier)}
     </span>
   );
 }

@@ -1,5 +1,5 @@
 import type {
-  Account, AccountInput, AppInfo, ChromeProfile, ClientStatus, ClientTarget,
+  Account, AccountInput, AppInfo, ChromeProfile, ClientStatus, ClientTarget, OpenTarget, PerksPatch,
   ServiceCheckResponse, Settings, SettingsResponse, SwitchResult, TotpResponse, UIPrefs,
 } from "./types";
 
@@ -62,7 +62,10 @@ export const api = {
   updateAccount: (id: number, b: AccountInput) => request<Account>("PUT", `/api/accounts/${id}`, b),
   deleteAccount: (id: number, keepalive = false) => request<void>("DELETE", `/api/accounts/${id}`, undefined, keepalive),
   setTags: (id: number, tags: string[]) => request<Account>("PUT", `/api/accounts/${id}/tags`, { tags }),
-  open: (id: number, target: "browser" | "mail" | "password") => request<{ warning: string }>("POST", `/api/accounts/${id}/open?target=${target}`),
+  patchPerks: (id: number, patch: PerksPatch) => request<Account>("PATCH", `/api/accounts/${id}/perks`, patch),
+  refreshAccountPerks: (id: number) => request<Account>("POST", `/api/accounts/${id}/perks/refresh`),
+  refreshAllPerks: (ids?: number[]) => request<Account[]>("POST", ids && ids.length ? `/api/perks/refresh?ids=${ids.join(",")}` : "/api/perks/refresh"),
+  open: (id: number, target: OpenTarget) => request<{ warning: string }>("POST", `/api/accounts/${id}/open?target=${target}`),
   openUrl: (id: number, url: string) => request<{ warning: string }>("POST", `/api/accounts/${id}/open?url=${enc(url)}`),
   authorize: (id: number) => request<{ warning: string }>("POST", `/api/accounts/${id}/authorize`),
   markChanged: (id: number) => request<Account>("POST", `/api/accounts/${id}/password-changed`),
@@ -72,6 +75,7 @@ export const api = {
   chromeProfiles: () => request<{ user_data: string; profiles: ChromeProfile[] }>("GET", "/api/chrome-profiles"),
   importProfiles: (dirs: string[]) => request<{ added: number; existed: number }>("POST", "/api/chrome-profiles/import", { dirs }),
   detachChrome: () => request<{ converted: number }>("POST", "/api/accounts/detach-chrome"),
+  detachAccountChrome: (id: number) => request<Account>("POST", `/api/accounts/${id}/detach-chrome`),
   revealPassword: (id: number) => request<{ password: string; previous_password: string }>("POST", `/api/accounts/${id}/reveal-password`),
   pwStart: (id: number, regenerate = false) => request<{ current_password: string; new_password: string }>("POST", `/api/accounts/${id}/password-change/start`, { regenerate }),
   pwConfirm: (id: number) => request<Account>("POST", `/api/accounts/${id}/password-change/confirm`),

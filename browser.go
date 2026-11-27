@@ -12,9 +12,15 @@ import (
 
 // 点击按钮后在该账号的浏览器里打开的页面。
 var openTargets = map[string]string{
-	"browser":  "https://myaccount.google.com/",
-	"mail":     "https://mail.google.com/mail/u/0/",
-	"password": "https://myaccount.google.com/signinoptions/password",
+	"browser":       "https://myaccount.google.com/",
+	"mail":          "https://mail.google.com/mail/u/0/",
+	"password":      "https://myaccount.google.com/signinoptions/password",
+	"one":           "https://one.google.com/about/plans",
+	"subscriptions": "https://myaccount.google.com/subscriptions",
+	"flow":          "https://flow.google.com/",
+	"colab":         "https://colab.research.google.com/",
+	"benefits":      "https://me.developers.google.com/benefits",
+	"family":        "https://myaccount.google.com/family/details",
 }
 
 // allowGoogleURL 校验要在账号独立浏览器里打开的 Google 官方链接（如账号安全验证页）。
@@ -88,7 +94,10 @@ func launchChrome(chrome, userDataDir, chromeProfile, proxy, url string) error {
 	if chromeProfile != "" {
 		args = append(args, "--profile-directory="+chromeProfile)
 	} else {
-		args = append(args, "--no-first-run", "--no-default-browser-check")
+		if !chromeRunning(userDataDir) {
+			_ = os.Remove(filepath.Join(userDataDir, "DevToolsActivePort"))
+		}
+		args = append(args, "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0")
 		if proxy != "" {
 			args = append(args, "--proxy-server="+proxy)
 		}

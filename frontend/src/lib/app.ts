@@ -1,10 +1,11 @@
 import { api, ApiError } from "./api";
 import { copyText } from "./bridge";
-import { comparer, matchesFilter, type Filter, type Sort } from "./health";
+import { DEFAULT_CUSTOM_COLS, loadLocalListView, saveLocalListView, type ListViewPrefs } from "./columns";
+import { comparer, hasUrgentBilling, matchesFilter, matchesScope, type Filter, type Scope, type Sort } from "./health";
 import { matchesQuery } from "./format";
 import { createStore } from "./store";
 import { errText, toast } from "./toast";
-import type { Account, AccountInput, AppInfo, ClientStatus, ClientTarget, Settings } from "./types";
+import type { Account, AccountInput, AppInfo, ClientStatus, ClientTarget, ListColId, OpenTarget, PerksPatch, Settings } from "./types";
 
 export type UnlockThen = "reveal" | "copy" | "pwchange" | "pwresume";
 
@@ -22,13 +23,18 @@ export interface AppState {
   revealed: Record<number, { password: string; previous: string }>;
   totp: { codes: Record<string, string>; errors: Record<string, string>; periodEnd: number; period: number };
   filter: Filter;
+  scope: Scope;
   sort: Sort;
+  sortDesc: boolean;
+  listView: ListViewPrefs;
   tag: string;
   query: string;
   selectedId: number;
   hidden: number[]; // 已删除、还在「可撤销」窗口里的账号
   refreshingAll: boolean;
   refreshingIds: number[];
+  syncingAllPerks: boolean;
+  syncingPerksIds: number[];
   checkingIds: number[];
   awaitingAuth: number[];
   switching: ClientTarget | null;
@@ -62,13 +68,18 @@ export const app = createStore<AppState>({
   revealed: {},
   totp: { codes: {}, errors: {}, periodEnd: 0, period: 30 },
   filter: "all",
+  scope: "all",
   sort: "smart",
+  sortDesc: true,
+  listView: loadLocalListView(),
   tag: "",
   query: "",
   selectedId: 0,
   hidden: [],
   refreshingAll: false,
   refreshingIds: [],
+  syncingAllPerks: false,
+  syncingPerksIds: [],
   checkingIds: [],
   awaitingAuth: [],
   switching: null,
@@ -106,7 +117,7 @@ export function visibleAccounts(s: AppState): Account[] {
   return out;
 }
 
-let filtCache: { vis: Account[]; clients: ClientStatus[]; filter: Filter; tag: string; sort: Sort; query: string; out: Account[] } | null = null;
+let filtCache: { vis: Account[]; clients: ClientStatus[]; filter: Filter; scope: Scope; tag: string; sort: Sort; sortDesc: boolean; query: string; out: Account[] } | null = null;
 export function filteredAccounts(s: AppState): Account[] {
   const vis = visibleAccounts(s);
   if (
@@ -114,16 +125,18 @@ export function filteredAccounts(s: AppState): Account[] {
     filtCache.vis === vis &&
     filtCache.clients === s.clients &&
     filtCache.filter === s.filter &&
+    filtCache.scope === s.scope &&
     filtCache.tag === s.tag &&
     filtCache.sort === s.sort &&
+    filtCache.sortDesc === s.sortDesc &&
     filtCache.query === s.query
   ) {
     return filtCache.out;
   }
   const out = vis
-    .filter((a) => matchesFilter(a, s.filter) && (!s.tag || a.tags.includes(s.tag)) && matchesQuery(a, s.query))
-    .sort(comparer(s.sort, s.clients));
-  filtCache = { vis, clients: s.clients, filter: s.filter, tag: s.tag, sort: s.sort, query: s.query, out };
+    .filter((a) => matchesFilter(a, s.filter) && matchesScope(a, s.scope) && (!s.tag || a.tags.includes(s.tag)) && matchesQuery(a, s.query))
+    .sort(comparer(s.sort, s.sortDesc, s.clients));
+  filtCache = { vis, clients: s.clients, filter: s.filter, scope: s.scope, tag: s.tag, sort: s.sort, sortDesc: s.sortDesc, query: s.query, out };
   return out;
 }
 
@@ -137,8 +150,14 @@ export const canSwitch = () => !!app.get().app?.capabilities.switch_clients;
 
 export async function loadAll() {
   try {
-    const [info, st, accounts, vault] = await Promise.all([api.app(), api.settings(), api.accounts(), api.vault()]);
-    app.set({
+    const [info, st, accounts, vault, uiPrefs] = await Promise.all([
+      api.app(),
+      api.settings(),
+      api.accounts(),
+      api.vault(),
+      api.uiPrefs().catch(() => null),
+    ]);
+    const patch: Partial<AppState> = {
       app: info,
       settings: st.settings,
       dataDir: st.data_dir,
@@ -148,12 +167,57 @@ export async function loadAll() {
       loadError: "",
       vaultUntil: vault.unlocked_until,
       osUser: vault.user || info.os_user,
-    });
+    };
+    if (uiPrefs && (uiPrefs.list_mode === "auto" || uiPrefs.list_mode === "custom")) {
+      const lv: ListViewPrefs = {
+        mode: uiPrefs.list_mode,
+        cols: { ...DEFAULT_CUSTOM_COLS, ...(uiPrefs.list_cols || {}) },
+      };
+      patch.listView = lv;
+      saveLocalListView(lv);
+    }
+    app.set(patch);
     scheduleVault();
     if (info.capabilities.switch_clients) loadClients();
     loadTotp();
   } catch (e) {
     app.set({ loaded: true, loadError: errText(e) });
+  }
+}
+
+export function setListView(next: ListViewPrefs) {
+  app.set({ listView: next });
+  saveLocalListView(next);
+  api
+    .uiPrefs()
+    .then((cur) => api.saveUiPrefs({ ...cur, list_mode: next.mode, list_cols: next.cols }))
+    .catch(() => {});
+}
+
+export function toggleListCol(id: ListColId, currentResolved: Record<ListColId, boolean>) {
+  const prev = app.get().listView;
+  const base = prev.mode === "custom" ? prev.cols : currentResolved;
+  const nextCols = { ...base, [id]: !base[id] };
+  setListView({ mode: "custom", cols: nextCols });
+}
+
+export function resetListViewAuto() {
+  const cur = app.get().listView;
+  setListView({ mode: "auto", cols: cur.cols });
+}
+
+export function toggleSortBy(key: Sort) {
+  const s = app.get();
+  if (key === "smart") {
+    app.set({ sort: "smart", sortDesc: true });
+    return;
+  }
+  if (s.sort === key) {
+    // 再次点击当前列头：切反向；第三次回到智能默认排序。
+    if (s.sortDesc) app.set({ sortDesc: false });
+    else app.set({ sort: "smart", sortDesc: true });
+  } else {
+    app.set({ sort: key, sortDesc: true });
   }
 }
 
@@ -321,12 +385,112 @@ function launched(r: { warning?: string }, msg: string) {
   else toast.ok(msg);
 }
 
-export async function openTarget(a: Account, target: "browser" | "mail" | "password") {
+const openTargetMsg: Record<OpenTarget, string> = {
+  browser: "已打开这个号的浏览器",
+  mail: "已打开 Gmail",
+  password: "已打开改密页",
+  one: "已打开 Google One 设置",
+  subscriptions: "已打开 Google 订阅管理",
+  flow: "已打开 Flow",
+  colab: "已打开 Colab",
+  benefits: "已打开开发者赠金领取页",
+  family: "已打开 Google 家庭组",
+};
+
+export async function openTarget(a: Account, target: OpenTarget) {
   try {
     const r = await api.open(a.id, target);
-    launched(r, target === "mail" ? "已打开 Gmail" : target === "password" ? "已打开改密页" : "已打开这个号的浏览器");
+    launched(r, openTargetMsg[target]);
   } catch (e) {
     toast.err(errText(e));
+  }
+}
+
+export async function patchPerks(
+  a: Account,
+  patch: PerksPatch,
+  opts?: { okMsg?: string; undoPatch?: PerksPatch; flash?: boolean },
+): Promise<Account | undefined> {
+  try {
+    const saved = await api.patchPerks(a.id, patch);
+    replaceAccount(saved);
+    if (opts?.flash) flashDone(a.id);
+    // 若正在「待退订」筛选下把最后一个高危号处理完，自动平滑切回全部列表，避免页面悬空。
+    const st = app.get();
+    if (st.scope === "billing" && !visibleAccounts(st).some((x) => hasUrgentBilling(x))) {
+      app.set({ scope: "all" });
+    }
+    if (opts?.okMsg) {
+      toast.ok(
+        opts.okMsg,
+        opts.undoPatch
+          ? {
+              action: {
+                label: "撤销",
+                run: async () => {
+                  try {
+                    replaceAccount(await api.patchPerks(a.id, opts.undoPatch!));
+                  } catch (e) {
+                    toast.err(errText(e));
+                  }
+                },
+              },
+            }
+          : undefined,
+      );
+    }
+    return saved;
+  } catch (e) {
+    toast.err(errText(e));
+    return undefined;
+  }
+}
+
+export async function detachOneChrome(a: Account) {
+  try {
+    const saved = await api.detachAccountChrome(a.id);
+    replaceAccount(saved);
+    flashDone(a.id);
+    toast.ok("已改为自带独立浏览器，下次打开登录一次即可");
+  } catch (e) {
+    toast.err(errText(e));
+  }
+}
+
+export async function refreshPerksOne(a: Account) {
+  if (app.get().syncingPerksIds.includes(a.id)) return;
+  app.set((s) => ({ syncingPerksIds: [...s.syncingPerksIds, a.id] }));
+  try {
+    const saved = await api.refreshAccountPerks(a.id);
+    replaceAccount(saved);
+    if (saved.perks?.web_status === "needs_login") {
+      toast.err("这个号的独立浏览器还没登录 Google，请先点「浏览器」登录一次");
+    } else if (saved.perks?.web_status === "account_mismatch") {
+      toast.err(saved.perks.web_error || "浏览器里登录的 Google 账号与该条目不一致");
+    } else {
+      flashDone(a.id);
+      toast.ok(`${a.email} 的 Flow 积分与会员权益已同步`);
+    }
+  } catch (e) {
+    toast.err(errText(e));
+  } finally {
+    app.set((s) => ({ syncingPerksIds: s.syncingPerksIds.filter((x) => x !== a.id) }));
+  }
+}
+
+export async function refreshPerksAll() {
+  if (app.get().syncingAllPerks) return;
+  app.set({ syncingAllPerks: true });
+  try {
+    const accounts = await api.refreshAllPerks();
+    app.set({ accounts });
+    const needLogin = accounts.filter((a) => a.perks?.web_status === "needs_login").length;
+    if (needLogin) toast.info(`会员权益已同步，其中 ${needLogin} 个号需在独立浏览器登录一次`);
+    else toast.ok("所有会员号的积分与附赠权益已同步");
+  } catch (e) {
+    toast.err(errText(e));
+  } finally {
+    app.set({ syncingAllPerks: false });
   }
 }
 
@@ -612,7 +776,7 @@ export async function saveAccount(input: AccountInput, id?: number): Promise<Acc
       return { revealed: r };
     });
   } else {
-    app.set((s) => ({ accounts: [...s.accounts, saved], selectedId: saved.id, filter: "all", tag: "", query: "" }));
+    app.set((s) => ({ accounts: [...s.accounts, saved], selectedId: saved.id, filter: "all", scope: "all", tag: "", query: "" }));
   }
   loadTotp();
   return saved;

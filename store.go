@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -54,6 +55,9 @@ type Account struct {
 	ServiceErrorID   string `json:"service_error_id"`   // Google 返回的 Error ID；没有就不伪造
 	AppealAt         int64  `json:"appeal_at"`          // 最近一次成功打开官方申诉页的时间（Unix 秒）
 	ServiceCheckedAt int64  `json:"service_checked_at"` // 最近一次服务检测时间（Unix 秒）
+
+	PerksJSON string `json:"-"`        // AccountPerks 的 JSON，空 = 还没记过会员权益
+	PerksAt   int64  `json:"perks_at"` // 最近一次自动同步会员权益的时间（Unix 秒）
 }
 
 type Settings struct {
@@ -70,10 +74,12 @@ type Settings struct {
 
 var defaultSettings = Settings{DefaultRiskDays: 7, NextPool: poolAny, NextThreshold: 10}
 
-// UIPrefs 是托盘小窗的偏好，和设置弹窗分开存，避免保存设置时被覆盖。
+// UIPrefs 是界面与托盘小窗的偏好，和设置弹窗分开存，避免保存设置时被覆盖。
 type UIPrefs struct {
-	Lightweight bool `json:"lightweight"` // 关闭主控制台时直接销毁窗口释放内存（否则只隐藏）
-	MiniPinned  bool `json:"mini_pinned"` // 小窗置顶且失焦不收起
+	Lightweight bool            `json:"lightweight"`           // 关闭主控制台时直接销毁窗口释放内存（否则只隐藏）
+	MiniPinned  bool            `json:"mini_pinned"`           // 小窗置顶且失焦不收起
+	ListMode    string          `json:"list_mode,omitempty"`   // "auto" | "custom"
+	ListCols    map[string]bool `json:"list_cols,omitempty"`   // 自定义模式下列表各列的开关
 }
 
 func today() string { return time.Now().Format(dateLayout) }
@@ -216,7 +222,10 @@ func decodeTags(raw string) []string {
 	return out
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db      *sql.DB
+	perksMu sync.Mutex // 保护 perks_json 的「读出 → 字段合并 → 写回」原子性
+}
 
 func OpenStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
@@ -264,6 +273,8 @@ CREATE TABLE IF NOT EXISTS settings (
 		{"service_error_id", `TEXT NOT NULL DEFAULT ''`},
 		{"appeal_at", `INTEGER NOT NULL DEFAULT 0`},
 		{"service_checked_at", `INTEGER NOT NULL DEFAULT 0`},
+		{"perks_json", `TEXT NOT NULL DEFAULT ''`},
+		{"perks_at", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if err := addColumnIfMissing(db, "accounts", c.name, c.def); err != nil {
 			db.Close()
@@ -298,14 +309,14 @@ func addColumnIfMissing(db *sql.DB, table, column, def string) error {
 
 const accountCols = `id, email, note, tags, login_date, risk_days, pwd_changed_date, proxy, profile_dir, chrome_profile, created_at,
 	refresh_token, quota_json, quota_error, quota_at, password, totp_secret, pending_password, previous_password, device_profile, switched_at,
-	service_disabled, service_error_id, appeal_at, service_checked_at`
+	service_disabled, service_error_id, appeal_at, service_checked_at, perks_json, perks_at`
 
 func scanAccount(row interface{ Scan(...any) error }) (Account, error) {
 	var a Account
 	var tagsRaw string
 	err := row.Scan(&a.ID, &a.Email, &a.Note, &tagsRaw, &a.LoginDate, &a.RiskDays, &a.PwdChangedDate, &a.Proxy, &a.ProfileDir, &a.ChromeProfile, &a.CreatedAt,
 		&a.RefreshToken, &a.QuotaJSON, &a.QuotaError, &a.QuotaAt, &a.Password, &a.TotpSecret, &a.PendingPassword, &a.PreviousPassword, &a.DeviceProfile, &a.SwitchedAt,
-		&a.ServiceDisabled, &a.ServiceErrorID, &a.AppealAt, &a.ServiceCheckedAt)
+		&a.ServiceDisabled, &a.ServiceErrorID, &a.AppealAt, &a.ServiceCheckedAt, &a.PerksJSON, &a.PerksAt)
 	a.Tags = decodeTags(tagsRaw)
 	return a, err
 }
